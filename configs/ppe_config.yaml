@@ -1,0 +1,74 @@
+# PPE Detection Configuration
+
+# Dataset Configuration
+dataset:
+  data_dir: "data"
+  num_classes: 9
+  img_size: 300
+  classes:
+    - "background"
+    - "person"
+    - "hard_hat"
+    - "safety_vest"
+    - "safety_gloves"
+    - "safety_boots"
+    - "eye_protection"
+    - "no_hard_hat"
+    - "no_safety_vest"
+
+# Model Configuration
+model:
+  architecture: "ssd300"
+  backbone: "vgg16"
+  pretrained: true
+
+# Training Configuration
+training:
+  batch_size: 8
+  epochs: 100
+  learning_rate: 0.001
+  momentum: 0.9
+  weight_decay: 0.0005
+  lr_decay_epochs: [80, 100]
+  lr_decay_factor: 0.1
+  num_workers: 4
+
+# Loss Configuration
+loss:
+  alpha: 1.0  # localization loss weight
+  neg_pos_ratio: 3
+  threshold: 0.5
+  ppe_weights:
+    background: 1.0
+    person: 1.0
+    hard_hat: 2.0
+    safety_vest: 2.0
+    safety_gloves: 1.5
+    safety_boots: 1.5
+    eye_protection: 1.5
+    no_hard_hat: 3.0
+    no_safety_vest: 3.0
+
+# Inference Configuration
+inference:
+  conf_threshold: 0.5
+  nms_threshold: 0.45
+  top_k: 200
+
+# OSHA Compliance Rules
+compliance:
+  critical_ppe:
+    - "hard_hat"
+    - "safety_vest"
+  required_ppe:
+    - "hard_hat"
+    - "safety_vest"
+    - "safety_boots"
+  violations:
+    - "no_hard_hat"
+    - "no_safety_vest"
+  severity_mapping:
+    critical: ["no_hard_hat", "no_safety_vest"]
+    high: ["person_without_ppe"]
+    medium: ["insufficient_ppe"]
+    low: ["minor_violation"]
