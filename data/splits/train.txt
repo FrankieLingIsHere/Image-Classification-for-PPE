@@ -1,0 +1,4 @@
+# Add your image filenames here (one per line)
+# Example:
+# construction_site_001.jpg
+# worker_with_ppe_002.jpg
