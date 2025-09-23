@@ -181,15 +181,18 @@ class PPEDataset(Dataset):
         
         # PPE classes according to OSHA requirements
         self.ppe_classes = [
-            'background',     # 0: background
-            'person',         # 1: worker/person
-            'hard_hat',       # 2: hard hat/helmet
-            'safety_vest',    # 3: high-visibility safety vest
-            'safety_gloves',  # 4: protective gloves
-            'safety_boots',   # 5: safety footwear
-            'eye_protection', # 6: safety glasses/goggles
-            'no_hard_hat',    # 7: person without hard hat (violation)
-            'no_safety_vest', # 8: person without safety vest (violation)
+            'background',          # 0: background
+            'person',              # 1: worker/person
+            'hard_hat',            # 2: hard hat/helmet
+            'safety_vest',         # 3: high-visibility safety vest
+            'safety_gloves',       # 4: protective gloves
+            'safety_boots',        # 5: safety footwear
+            'eye_protection',      # 6: safety glasses/goggles
+            'no_hard_hat',         # 7: person without hard hat (violation)
+            'no_safety_vest',      # 8: person without safety vest (violation)
+            'no_safety_gloves',    # 9: person without safety gloves (violation)
+            'no_safety_boots',     # 10: person without safety boots (violation)
+            'no_eye_protection',   # 11: person without eye protection (violation)
         ]
         
         # Create label mappings
@@ -216,24 +219,19 @@ class PPEDataset(Dataset):
     
     def _get_default_transforms(self):
         """Get default transforms for training and testing"""
+        # Simple transforms without lambda functions for Windows compatibility
         train_transforms = transforms.Compose([
-            transforms.RandomPhotometricDistort(),
-            transforms.RandomZoomOut(fill=self.img_mean),
-            transforms.RandomIoUCrop(),
-            transforms.RandomHorizontalFlip(p=0.5),
-            transforms.Resize(size=(self.img_size, self.img_size)),
-            transforms.SanitizeBoundingBoxes(
-                labels_getter=lambda x: (x[1]["labels"], x[1]["difficult"])
-            ),
-            transforms.ToPureTensor(),
-            transforms.ToDtype(torch.float32, scale=True),
+            transforms.ToPILImage(),
+            transforms.Resize((self.img_size, self.img_size)),
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+            transforms.ToTensor(),
             transforms.Normalize(mean=self.imagenet_mean, std=self.imagenet_std)
         ])
         
         test_transforms = transforms.Compose([
-            transforms.Resize(size=(self.img_size, self.img_size)),
-            transforms.ToPureTensor(),
-            transforms.ToDtype(torch.float32, scale=True),
+            transforms.ToPILImage(),
+            transforms.Resize((self.img_size, self.img_size)),
+            transforms.ToTensor(),
             transforms.Normalize(mean=self.imagenet_mean, std=self.imagenet_std)
         ])
         

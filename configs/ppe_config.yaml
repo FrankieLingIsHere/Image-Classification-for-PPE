@@ -3,7 +3,7 @@
 # Dataset Configuration
 dataset:
   data_dir: "data"
-  num_classes: 9
+  num_classes: 13
   img_size: 300
   classes:
     - "background"
@@ -15,6 +15,9 @@ dataset:
     - "eye_protection"
     - "no_hard_hat"
     - "no_safety_vest"
+    - "no_safety_gloves"
+    - "no_safety_boots"
+    - "no_eye_protection"
 
 # Model Configuration
 model:
@@ -48,6 +51,9 @@ loss:
     eye_protection: 1.5
     no_hard_hat: 3.0
     no_safety_vest: 3.0
+    no_safety_gloves: 2.5
+    no_safety_boots: 2.5
+    no_eye_protection: 2.5
 
 # Inference Configuration
 inference:

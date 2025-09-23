@@ -22,10 +22,10 @@ from torch.utils.tensorboard import SummaryWriter
 # Add src to path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from dataset.ppe_dataset import PPEDataset, create_sample_data_structure
-from models.ssd import build_ssd_model
-from models.loss import PPELoss, create_prior_boxes
-from utils.utils import save_checkpoint, load_checkpoint, AverageMeter, adjust_learning_rate
+from src.dataset.ppe_dataset import PPEDataset, create_sample_data_structure
+from src.models.ssd import build_ssd_model
+from src.models.loss import PPELoss, create_prior_boxes
+from src.utils.utils import save_checkpoint, load_checkpoint, AverageMeter, adjust_learning_rate
 
 
 def parse_args():
@@ -43,7 +43,7 @@ def parse_args():
     # Model arguments
     parser.add_argument('--img_size', type=int, default=300,
                        help='Input image size')
-    parser.add_argument('--num_classes', type=int, default=9,
+    parser.add_argument('--num_classes', type=int, default=13,
                        help='Number of classes including background')
     
     # Training arguments
@@ -139,12 +139,15 @@ def create_data_loaders(args):
         print(f"Error creating datasets: {e}")
         return None, None
     
-    # Create data loaders
+    # Create data loaders with Windows-compatible settings
+    # Use num_workers=0 to avoid multiprocessing issues on Windows
+    num_workers = 0 if os.name == 'nt' else args.num_workers
+    
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
         shuffle=True,
-        num_workers=args.num_workers,
+        num_workers=num_workers,
         pin_memory=True,
         collate_fn=collate_fn
     )
@@ -153,7 +156,7 @@ def create_data_loaders(args):
         val_dataset,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=args.num_workers,
+        num_workers=num_workers,
         pin_memory=True,
         collate_fn=collate_fn
     ) if len(val_dataset) > 0 else None

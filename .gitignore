@@ -37,6 +37,7 @@ results/
 *.png
 *.xml
 *.json
+*.txt
 
 # Environment
 .env

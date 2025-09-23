@@ -8,3 +8,10 @@ tqdm>=4.62.0
 PyYAML>=6.0
 tensorboard>=2.8.0
 scikit-learn>=1.0.0
+
+# For hybrid PPE description model
+transformers>=4.30.0
+accelerate>=0.20.0
+torch-audio>=2.0.0
+sentencepiece>=0.1.99
+protobuf>=3.20.0

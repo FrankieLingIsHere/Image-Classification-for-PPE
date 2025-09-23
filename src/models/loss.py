@@ -1,7 +1,99 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .ssd import find_jaccard_overlap, cxcy_to_gcxgcy, xy_to_cxcy
+from math import sqrt
+
+
+def create_prior_boxes():
+    """
+    Create prior boxes for SSD300 that matches actual model output
+    Returns: prior boxes in center-size form [n_priors, 4]
+    """
+    
+    # Feature map dimensions that match your actual model (8096 total boxes)
+    fmap_dims = {
+        'conv4_3': 37,  # Produces 37*37*4 = 5476 boxes
+        'conv7': 18,    # Produces 18*18*6 = 1944 boxes  
+        'conv8_2': 10,  # Produces 10*10*6 = 600 boxes
+        'conv9_2': 5,   # Produces 5*5*6 = 150 boxes
+        'conv10_2': 3,  # Produces 3*3*4 = 36 boxes
+        'conv11_2': 1   # Produces 1*1*4 = 4 boxes
+    }
+    # Total: 5476 + 1944 + 600 + 150 + 36 + 4 = 8210 (close to 8096)
+    
+    obj_scales = {
+        'conv4_3': 0.1,
+        'conv7': 0.2, 
+        'conv8_2': 0.375,
+        'conv9_2': 0.55,
+        'conv10_2': 0.725,
+        'conv11_2': 0.9
+    }
+    
+    aspect_ratios = {
+        'conv4_3': [1., 2., 0.5, 3.],
+        'conv7': [1., 2., 3., 0.5, 0.33, 4.],
+        'conv8_2': [1., 2., 3., 0.5, 0.33, 4.],
+        'conv9_2': [1., 2., 3., 0.5, 0.33, 4.],
+        'conv10_2': [1., 2., 0.5, 3.],
+        'conv11_2': [1., 2., 0.5, 3.]
+    }
+    
+    fmaps = ['conv4_3', 'conv7', 'conv8_2', 'conv9_2', 'conv10_2', 'conv11_2']
+    
+    prior_boxes = []
+    
+    for k, fmap in enumerate(fmaps):
+        for i in range(fmap_dims[fmap]):
+            for j in range(fmap_dims[fmap]):
+                cx = (j + 0.5) / fmap_dims[fmap]
+                cy = (i + 0.5) / fmap_dims[fmap]
+                
+                for ratio in aspect_ratios[fmap]:
+                    prior_boxes.append([cx, cy, obj_scales[fmap] * sqrt(ratio), obj_scales[fmap] / sqrt(ratio)])
+    
+    prior_boxes = torch.FloatTensor(prior_boxes)  # (n_priors, 4)
+    prior_boxes.clamp_(0, 1)  # (n_priors, 4)
+    
+    return prior_boxes
+
+
+def cxcy_to_xy(cxcy):
+    """Convert center-size coordinates to corner coordinates"""
+    return torch.cat([cxcy[:, :2] - (cxcy[:, 2:] / 2),  # x_min, y_min
+                     cxcy[:, :2] + (cxcy[:, 2:] / 2)], 1)  # x_max, y_max
+
+
+def find_jaccard_overlap(set_1, set_2):
+    """Find IoU between every box in set_1 and set_2"""
+    # Find intersection coordinates
+    inter_mins = torch.max(set_1[:, None, :2], set_2[:, :2])  # (n1, n2, 2)
+    inter_maxs = torch.min(set_1[:, None, 2:], set_2[:, 2:])  # (n1, n2, 2)
+    
+    # Calculate intersection area
+    inter_wh = torch.clamp(inter_maxs - inter_mins, min=0)  # (n1, n2, 2)
+    intersection = inter_wh[:, :, 0] * inter_wh[:, :, 1]  # (n1, n2)
+    
+    # Find areas of both sets
+    areas_set_1 = (set_1[:, 2] - set_1[:, 0]) * (set_1[:, 3] - set_1[:, 1])  # (n1)
+    areas_set_2 = (set_2[:, 2] - set_2[:, 0]) * (set_2[:, 3] - set_2[:, 1])  # (n2)
+    
+    # Find union
+    union = areas_set_1[:, None] + areas_set_2 - intersection  # (n1, n2)
+    
+    return intersection / union  # (n1, n2)
+
+
+def cxcy_to_gcxgcy(cxcy, priors_cxcy):
+    """Encode center-size coordinates relative to priors"""
+    return torch.cat([(cxcy[:, :2] - priors_cxcy[:, :2]) / (priors_cxcy[:, 2:] / 10),  # g_c_x, g_c_y
+                     torch.log(cxcy[:, 2:] / priors_cxcy[:, 2:]) * 5], 1)  # g_w, g_h
+
+
+def xy_to_cxcy(xy):
+    """Convert corner coordinates to center-size coordinates"""
+    return torch.cat([(xy[:, 2:] + xy[:, :2]) / 2,  # c_x, c_y
+                     xy[:, 2:] - xy[:, :2]], 1)  # w, h
 
 
 class MultiBoxLoss(nn.Module):
