@@ -17,7 +17,7 @@ def install_dependencies():
     packages = [
         "transformers>=4.30.0",
         "accelerate>=0.20.0", 
-        "torch-audio>=2.0.0",
+        "torchaudio>=2.0.0",
         "sentencepiece>=0.1.99",
         "protobuf>=3.20.0"
     ]

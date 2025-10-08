@@ -27,12 +27,12 @@ model:
 
 # Training Configuration
 training:
-  batch_size: 8
-  epochs: 100
+  batch_size: 16  # Increased from 8 to 16
+  epochs: 200     # Increased from 100 to 200
   learning_rate: 0.001
   momentum: 0.9
   weight_decay: 0.0005
-  lr_decay_epochs: [80, 100]
+  lr_decay_epochs: [120, 160, 180]  # Adjusted for longer training
   lr_decay_factor: 0.1
   num_workers: 4
 

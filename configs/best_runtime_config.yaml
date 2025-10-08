@@ -1,0 +1,16 @@
+# Best runtime config discovered from parameter sweeps
+# Chosen settings to prioritize person recall while reducing PPE false positives
+conf_threshold: 0.05
+iou_threshold: 0.3
+eval_iou_threshold: 0.5
+person_overlap_threshold: 0.10
+post_nms_iou: 0.30
+class_conf_thresholds:
+  person: 0.11
+  hard_hat: 0.22
+  safety_vest: 0.22
+  safety_gloves: 0.20
+  safety_boots: 0.20
+  eye_protection: 0.20
+  no_hard_hat: 0.12
+  no_safety_vest: 0.12

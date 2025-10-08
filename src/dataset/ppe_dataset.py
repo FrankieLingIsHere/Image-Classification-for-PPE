@@ -47,14 +47,28 @@ def load_ppe_images_and_annotations(data_dir, label2idx, split):
     for img_name in image_names:
         # Support both .jpg and .xml annotation formats
         base_name = os.path.splitext(img_name)[0]
-        img_path = os.path.join(images_dir, f"{base_name}.jpg")
+        
+        # Try different image extensions
+        img_path = None
+        for ext in ['.jpg', '.png', '.jpeg']:
+            potential_path = os.path.join(images_dir, f"{base_name}{ext}")
+            if os.path.exists(potential_path):
+                img_path = potential_path
+                break
+        
+        # If we have the full filename with extension in the split file, try that too
+        if img_path is None:
+            potential_path = os.path.join(images_dir, img_name)
+            if os.path.exists(potential_path):
+                img_path = potential_path
+        
+        if img_path is None:
+            print(f"Warning: Image not found for {img_name} (tried {base_name}.jpg, {base_name}.png, {base_name}.jpeg)")
+            continue
         
         # Try XML annotation first, then JSON
         xml_path = os.path.join(annotations_dir, f"{base_name}.xml")
         json_path = os.path.join(annotations_dir, f"{base_name}.json")
-        
-        if not os.path.exists(img_path):
-            continue
             
         im_info = {
             'img_id': base_name,
@@ -258,10 +272,24 @@ class PPEDataset(Dataset):
         # Load image
         try:
             image = read_image(im_info['filename'])
+            # Ensure image has exactly 3 channels (RGB)
+            if image.shape[0] == 4:  # RGBA
+                image = image[:3]  # Remove alpha channel
+            elif image.shape[0] == 1:  # Grayscale
+                image = image.repeat(3, 1, 1)  # Convert to RGB
         except Exception as e:
             print(f"Error loading image {im_info['filename']}: {e}")
-            # Return a dummy image
-            image = torch.zeros(3, 480, 640, dtype=torch.uint8)
+            # Try loading with PIL as fallback for problematic formats
+            try:
+                from PIL import Image
+                pil_img = Image.open(im_info['filename']).convert('RGB')
+                import numpy as np
+                image = torch.from_numpy(np.array(pil_img)).permute(2, 0, 1)
+                print(f"Successfully loaded {im_info['filename']} using PIL fallback")
+            except Exception as e2:
+                print(f"PIL fallback also failed for {im_info['filename']}: {e2}")
+                # Return a dummy image
+                image = torch.zeros(3, 480, 640, dtype=torch.uint8)
         
         # Prepare targets
         targets = {}

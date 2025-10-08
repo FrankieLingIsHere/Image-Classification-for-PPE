@@ -6,7 +6,7 @@ Tests the combined PPE detection + general scene description
 
 import sys
 import os
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from src.models.hybrid_ppe_model import HybridPPEDescriptionModel
 from PIL import Image

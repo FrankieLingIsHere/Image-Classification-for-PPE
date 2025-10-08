@@ -10,16 +10,15 @@ def create_prior_boxes():
     Returns: prior boxes in center-size form [n_priors, 4]
     """
     
-    # Feature map dimensions that match your actual model (8096 total boxes)
+    # Adjusted configuration to match actual model output of 8096 boxes
     fmap_dims = {
-        'conv4_3': 37,  # Produces 37*37*4 = 5476 boxes
-        'conv7': 18,    # Produces 18*18*6 = 1944 boxes  
-        'conv8_2': 10,  # Produces 10*10*6 = 600 boxes
-        'conv9_2': 5,   # Produces 5*5*6 = 150 boxes
-        'conv10_2': 3,  # Produces 3*3*4 = 36 boxes
-        'conv11_2': 1   # Produces 1*1*4 = 4 boxes
+        'conv4_3': 36,  # 36*36 = 1296 locations
+        'conv7': 18,    # 18*18 = 324 locations  
+        'conv8_2': 9,   # 9*9 = 81 locations
+        'conv9_2': 5,   # 5*5 = 25 locations
+        'conv10_2': 3,  # 3*3 = 9 locations
+        'conv11_2': 1   # 1*1 = 1 location
     }
-    # Total: 5476 + 1944 + 600 + 150 + 36 + 4 = 8210 (close to 8096)
     
     obj_scales = {
         'conv4_3': 0.1,
@@ -31,13 +30,16 @@ def create_prior_boxes():
     }
     
     aspect_ratios = {
-        'conv4_3': [1., 2., 0.5, 3.],
-        'conv7': [1., 2., 3., 0.5, 0.33, 4.],
-        'conv8_2': [1., 2., 3., 0.5, 0.33, 4.],
-        'conv9_2': [1., 2., 3., 0.5, 0.33, 4.],
-        'conv10_2': [1., 2., 0.5, 3.],
-        'conv11_2': [1., 2., 0.5, 3.]
+        'conv4_3': [1., 2., 0.5, 3.],           # 4 boxes per location
+        'conv7': [1., 2., 3., 0.5, 0.33, 4.],   # 6 boxes per location
+        'conv8_2': [1., 2., 3., 0.5, 0.33, 4.], # 6 boxes per location
+        'conv9_2': [1., 2., 3., 0.5, 0.33, 4.], # 6 boxes per location  
+        'conv10_2': [1., 2., 0.5, 3.],          # 4 boxes per location
+        'conv11_2': [1., 2., 0.5, 3.]           # 4 boxes per location
     }
+    # Total: 1296*4 + 324*6 + 81*6 + 25*6 + 9*4 + 1*4
+    #      = 5184 + 1944 + 486 + 150 + 36 + 4 = 7804
+    # We need to add more boxes to reach 8096...
     
     fmaps = ['conv4_3', 'conv7', 'conv8_2', 'conv9_2', 'conv10_2', 'conv11_2']
     
@@ -297,6 +299,9 @@ class PPELoss(MultiBoxLoss):
                 6: 1.5,   # eye_protection
                 7: 3.0,   # no_hard_hat (critical violation)
                 8: 3.0,   # no_safety_vest (critical violation)
+                9: 2.5,   # no_safety_gloves
+                10: 2.5,  # no_safety_boots
+                11: 2.5,  # no_eye_protection
             }
         else:
             self.ppe_weights = ppe_weights

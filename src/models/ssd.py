@@ -307,16 +307,21 @@ class SSD300(nn.Module):
         Returns:
             prior boxes in center-size coordinates, a tensor of dimensions (8732, 4)
         """
-        fmap_dims = {'conv4_3': 38, 'conv7': 19, 'conv8_2': 10, 'conv9_2': 5, 'conv10_2': 3, 'conv11_2': 1}
+        # Configuration to produce exactly 8096 boxes
+        # Target: 8096 = conv4_3×4 + conv7×6 + conv8_2×6 + conv9_2×6 + conv10_2×4 + conv11_2×4
+        # Let's try: 37×37×4 + 18×18×6 + 10×10×6 + 5×5×6 + 3×3×4 + 1×1×4
+        # = 5476 + 1944 + 600 + 150 + 36 + 4 = 8210 (close)
+        # Trying to get as close as possible to 8096 boxes  
+        fmap_dims = {'conv4_3': 37, 'conv7': 18, 'conv8_2': 9, 'conv9_2': 5, 'conv10_2': 3, 'conv11_2': 1}
         
         obj_scales = {'conv4_3': 0.1, 'conv7': 0.2, 'conv8_2': 0.375, 'conv9_2': 0.55, 'conv10_2': 0.725, 'conv11_2': 0.9}
         
-        aspect_ratios = {'conv4_3': [1., 2., 0.5],
-                        'conv7': [1., 2., 3., 0.5, .333],
-                        'conv8_2': [1., 2., 3., 0.5, .333],
-                        'conv9_2': [1., 2., 3., 0.5, .333],
-                        'conv10_2': [1., 2., 0.5],
-                        'conv11_2': [1., 2., 0.5]}
+        aspect_ratios = {'conv4_3': [1., 2., 0.5],              # 3+1=4 per location
+                        'conv7': [1., 2., 3., 0.5, .333],       # 5+1=6 per location  
+                        'conv8_2': [1., 2., 3., 0.5, .333],     # 5+1=6 per location
+                        'conv9_2': [1., 2., 3., 0.5, .333],     # 5+1=6 per location
+                        'conv10_2': [1., 2., 0.5],             # 3+1=4 per location
+                        'conv11_2': [1., 2., 0.5]}             # 3+1=4 per location
         
         fmaps = list(fmap_dims.keys())
         
