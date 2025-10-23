@@ -4,6 +4,14 @@
 Saves model to: models/rcnn_baseline.pth
 Writes per-image detection JSONs to: outputs/rcnn_baseline/<image>_results.json
 
+Enhanced with translation/rotation/scale-invariant augmentations (--augment flag):
+- Random horizontal/vertical flips
+- Affine transformations (translate, scale, rotate)
+- Perspective distortion
+- Color jittering
+- Gaussian blur
+- Proper ImageNet normalization
+
 This is intentionally separated from existing SSD artifacts.
 """
 
@@ -181,7 +189,7 @@ def main():
     parser.add_argument('--step_size', type=int, default=4)
     parser.add_argument('--step_gamma', type=float, default=0.1)
     parser.add_argument('--freeze_backbone_epochs', type=int, default=0, help='Number of initial epochs to freeze backbone')
-    parser.add_argument('--augment', action='store_true', help='Use simple augmentations (RandomHorizontalFlip)')
+    parser.add_argument('--augment', action='store_true', help='Use advanced augmentations (flip, affine, perspective, color, rotation, blur) for translation/rotation/scale invariance')
     parser.add_argument('--resume', action='store_true', help='Resume training from a checkpoint')
     parser.add_argument('--resume_checkpoint', type=str, default=None, help='Path to checkpoint to resume from')
     parser.add_argument('--resume-start-epoch', type=int, default=None, help='(Optional) force trainer to treat resume checkpoint as having completed this many epochs (useful if checkpoint lacks epoch metadata)')
@@ -193,10 +201,26 @@ def main():
     device = torch.device(args.device)
 
     # Datasets
-    # setup transforms / augmentations
+    # setup transforms / augmentations - enhanced for translation/rotation/scale invariance
     train_transforms = None
     if args.augment:
-        train_transforms = T.Compose([T.RandomHorizontalFlip(0.5), T.ToTensor()])
+        train_transforms = T.Compose([
+            T.RandomHorizontalFlip(0.5),
+            T.RandomVerticalFlip(0.2),
+            T.RandomAffine(degrees=20, translate=(0.15, 0.15), scale=(0.85, 1.15)),
+            T.RandomPerspective(distortion_scale=0.2, p=0.3),
+            T.ColorJitter(brightness=0.25, contrast=0.25, saturation=0.25, hue=0.1),
+            T.RandomRotation(degrees=15),
+            T.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0)),
+            T.ToTensor(),
+            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+    else:
+        # Even without --augment flag, apply normalization
+        train_transforms = T.Compose([
+            T.ToTensor(),
+            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
 
     train_ds = TorchvisionPPEDataset(args.data_dir, split='train', transforms=train_transforms)
     val_ds = TorchvisionPPEDataset(args.data_dir, split='test')
