@@ -319,6 +319,53 @@ def process_single_image(image_path, model, device, args, class_names):
         }
         results['detections'].append(detection)
 
+    # Optional: run relational rescorer for debugging to see rescore distributions
+    if os.environ.get('PPE_RESCORER_DEBUG') == '1' and len(results['detections']) > 0:
+        try:
+            from src.models.relational_rescorer import RelationalRescorer
+            import numpy as _np
+
+            # instantiate a temporary rescorer (MLP) and move to device if possible
+            r = RelationalRescorer(node_feat_dim=6)
+            try:
+                r.to(device)
+            except Exception:
+                pass
+
+            # Build node features: [score, cx, cy, w, h, area] normalized by img_size
+            node_feats = []
+            boxes_list = []
+            labels_list = []
+            scores_list = []
+            for d in results['detections']:
+                bbox = d['bbox']
+                x1, y1, x2, y2 = bbox
+                cx = (x1 + x2) / 2.0 / args.img_size
+                cy = (y1 + y2) / 2.0 / args.img_size
+                w = max(0.0, (x2 - x1) / args.img_size)
+                h = max(0.0, (y2 - y1) / args.img_size)
+                area = w * h
+                s = float(d.get('confidence', 0.0))
+                node_feats.append([s, cx, cy, w, h, area])
+                boxes_list.append([x1/args.img_size, y1/args.img_size, x2/args.img_size, y2/args.img_size])
+                labels_list.append(int(d.get('class_id', 0)))
+                scores_list.append(s)
+
+            node_feats_t = torch.tensor(node_feats, dtype=torch.float32, device=device)
+            boxes_t = torch.tensor(boxes_list, dtype=torch.float32, device=device)
+            labels_t = torch.tensor(labels_list, dtype=torch.long, device=device)
+            scores_t = torch.tensor(scores_list, dtype=torch.float32, device=device)
+
+            with torch.no_grad():
+                try:
+                    rescores = r(node_feats_t, boxes_t, labels_t, scores_t)
+                    rr = rescores.detach().cpu().numpy()
+                    print(f"[PPE_RESCORER] image={Path(image_path).name} rescore_min={_np.min(rr):.4f} mean={_np.mean(rr):.4f} max={_np.max(rr):.4f} shape={rr.shape}")
+                except Exception as e:
+                    print(f"[PPE_RESCORER] forward failed for {Path(image_path).name}: {e}")
+        except Exception as ie:
+            print(f"[PPE_RESCORER] import/init failed: {ie}")
+
     # Apply optional person-first & per-class confidence filtering if provided in args
     if hasattr(args, 'class_conf_thresholds') and isinstance(args.class_conf_thresholds, dict):
         person_overlap = getattr(args, 'person_overlap_threshold', 0.0)

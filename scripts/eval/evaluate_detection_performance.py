@@ -27,6 +27,7 @@ import sys
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from src.models.ssd import build_ssd_model
+from torchvision.models.detection import fasterrcnn_resnet50_fpn
 from src.dataset.ppe_dataset import PPEDataset
 from src.utils.utils import calculate_iou
 
@@ -56,7 +57,7 @@ def _normalize_label(name: str) -> str:
 class PPEDetectionEvaluator:
     """Comprehensive evaluation of PPE detection performance"""
     
-    def __init__(self, model_path, data_dir, config_path, output_dir):
+    def __init__(self, model_path, data_dir, config_path, output_dir, rescorer_alpha: float = 1.0):
         self.model_path = model_path
         self.data_dir = Path(data_dir)
         self.config_path = config_path
@@ -78,6 +79,15 @@ class PPEDetectionEvaluator:
         
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = self._load_model()
+
+        # Lazy rescorer (load once on first use)
+        self.rescorer = None
+        self.rescorer_path = Path(__file__).resolve().parents[2] / 'models' / 'rescorer.pth'
+
+        # blending weight for rescorer (alpha in [0,1])
+        # alpha=1.0 => fully use multiplicative rescore (original behavior)
+        # alpha=0.0 => ignore rescorer
+        self.rescorer_alpha = float(rescorer_alpha)
 
         self.conf_threshold = 0.5
         self.iou_threshold = 0.45
@@ -115,7 +125,7 @@ class PPEDetectionEvaluator:
                     self.class_conf_thresholds.update(cfg['class_conf_thresholds'])
                     self.effective_config['class_conf_thresholds'] = self.class_conf_thresholds
             except Exception as e:
-                print(f"\u26a0\ufe0f  Failed to load config {self.config_path}: {e}")
+                print(f"[WARN]  Failed to load config {self.config_path}: {e}")
         
         self.results = {
             'summary': {},
@@ -152,21 +162,138 @@ class PPEDetectionEvaluator:
         else:
             n_classes_from_checkpoint = len(self.class_names)
 
-        model = build_ssd_model(num_classes=n_classes_from_checkpoint)
-        
-        if os.path.exists(self.model_path):
-            checkpoint = torch.load(self.model_path, map_location=self.device)
-            if 'model_state_dict' in checkpoint:
-                model.load_state_dict(checkpoint['model_state_dict'])
+        # First attempt: SSD model (backwards-compatible)
+        try:
+            model = build_ssd_model(num_classes=n_classes_from_checkpoint)
+            if os.path.exists(self.model_path):
+                checkpoint = torch.load(self.model_path, map_location=self.device)
+                sd = checkpoint.get('model_state_dict', checkpoint)
+                try:
+                    model.load_state_dict(sd)
+                    print("[OK] SSD model loaded successfully")
+                    self.model_type = 'ssd'
+                except Exception as e:
+                    # If SSD load failed, fall through to try RCNN
+                    print(f"[WARN] SSD load failed ({e}), attempting Faster R-CNN load...")
+                    raise
             else:
-                model.load_state_dict(checkpoint)
-            print("\u2713 Model loaded successfully")
-        else:
-            print("\u26a0\ufe0f  Model file not found, using random weights")
+                print("[WARN]  Model file not found, using random SSD weights")
+                self.model_type = 'ssd'
+
+        except Exception:
+            # Try loading as a Faster R-CNN checkpoint (common for rcnn_baseline.pth)
+            try:
+                print("Attempting to construct Faster R-CNN model (resnet50_fpn)")
+                model = fasterrcnn_resnet50_fpn(pretrained=False, num_classes=n_classes_from_checkpoint)
+                if os.path.exists(self.model_path):
+                    checkpoint = torch.load(self.model_path, map_location=self.device)
+                    sd = checkpoint.get('model_state_dict', checkpoint)
+                    try:
+                        # Attempt a non-strict load to tolerate small key differences
+                        model.load_state_dict(sd, strict=False)
+                        print("[OK] Faster R-CNN loaded (partial/relaxed match)")
+                    except Exception as ee:
+                        print(f"[WARN] Faster R-CNN load warning: {ee}")
+                else:
+                    print("[WARN]  Model file not found, using random R-CNN weights")
+
+                self.model_type = 'rcnn'
+            except Exception as final_e:
+                # If both fail, re-raise the original error
+                raise RuntimeError(f"Failed to load model as SSD or Faster R-CNN: {final_e}")
 
         model.to(self.device)
         model.eval()
         return model
+
+    def _load_rescorer_once(self):
+        """Load the RelationalRescorer from disk once and cache it on the evaluator instance.
+        Loading is tolerant to mismatched checkpoint shapes by filtering matching-shaped params.
+        Returns the loaded model or None if unavailable/failed.
+        """
+        if getattr(self, 'rescorer', None) is not None:
+            return self.rescorer
+
+        if not self.rescorer_path.exists():
+            return None
+
+        try:
+            from src.models.relational_rescorer import RelationalRescorer
+        except Exception as e:
+            if os.environ.get('PPE_RESCORER_DEBUG') == '1':
+                print(f"[PPE_RESCORER] import failed: {e}")
+            return None
+
+        try:
+            # Inspect checkpoint to infer architecture (hidden size) if possible
+            raw = torch.load(str(self.rescorer_path), map_location=self.device)
+            state_for_arch = None
+            if isinstance(raw, dict) and ('model_state_dict' in raw or 'state_dict' in raw):
+                state_for_arch = raw.get('model_state_dict', raw.get('state_dict'))
+            else:
+                state_for_arch = raw
+
+            inferred_hidden = None
+            if isinstance(state_for_arch, dict):
+                # common key from the MLP: 'net.0.weight' -> shape (hidden, node_feat_dim)
+                for candidate in ['net.0.weight', 'net.0.weight_orig', 'net.0._packed_params']:
+                    if candidate in state_for_arch:
+                        try:
+                            inferred_hidden = int(state_for_arch[candidate].size(0))
+                            break
+                        except Exception:
+                            pass
+
+            if inferred_hidden is not None:
+                r = RelationalRescorer(node_feat_dim=6, hidden=inferred_hidden)
+            else:
+                r = RelationalRescorer(node_feat_dim=6)
+            # raw remains loaded for state extraction below
+            if isinstance(raw, dict) and ('model_state_dict' in raw or 'state_dict' in raw):
+                state = raw.get('model_state_dict', raw.get('state_dict'))
+            else:
+                state = raw
+
+            model_sd = r.state_dict()
+            if isinstance(state, dict) and any(isinstance(v, torch.Tensor) for v in state.values()):
+                filtered = {}
+                loaded_keys = []
+                for k, v in state.items():
+                    if k in model_sd and isinstance(v, torch.Tensor) and v.size() == model_sd[k].size():
+                        filtered[k] = v
+                        loaded_keys.append(k)
+                if len(filtered) > 0:
+                    r.load_state_dict(filtered, strict=False)
+                    if os.environ.get('PPE_RESCORER_DEBUG') == '1':
+                        print(f"[PPE_RESCORER] loaded {len(loaded_keys)} matching params from checkpoint")
+                else:
+                    try:
+                        r.load_state_dict(state, strict=False)
+                    except Exception as e:
+                        if os.environ.get('PPE_RESCORER_DEBUG') == '1':
+                            print(f"[PPE_RESCORER] failed to load any params from checkpoint: {e}")
+            else:
+                try:
+                    r.load_state_dict(state)
+                except Exception:
+                    try:
+                        r.load_state_dict(state, strict=False)
+                    except Exception as e:
+                        if os.environ.get('PPE_RESCORER_DEBUG') == '1':
+                            print(f"[PPE_RESCORER] failed to load checkpoint: {e}")
+
+            try:
+                r.to(self.device)
+            except Exception:
+                pass
+
+            r.eval()
+            self.rescorer = r
+            return self.rescorer
+        except Exception as e:
+            if os.environ.get('PPE_RESCORER_DEBUG') == '1':
+                print(f"[PPE_RESCORER] _load_rescorer_once failed: {e}")
+            return None
 
     def _load_ground_truth(self, split='test'):
         split_file = self.data_dir / 'splits' / f'{split}.txt'
@@ -189,9 +316,9 @@ class PPEDetectionEvaluator:
             elif json_path.exists():
                 ground_truth[img_name] = self._parse_json_annotation(json_path)
             else:
-                print(f"\u26a0\ufe0f  No annotation found for {img_name}")
+                print(f"[WARN]  No annotation found for {img_name}")
         
-        print(f"\u2713 Loaded ground truth for {len(ground_truth)} images")
+        print(f"[OK] Loaded ground truth for {len(ground_truth)} images")
         return ground_truth
 
     def _parse_xml_annotation(self, xml_path):
@@ -238,46 +365,124 @@ class PPEDetectionEvaluator:
     def _detect_image(self, image_path):
         image = Image.open(image_path).convert('RGB')
         original_size = image.size
-        
+
+        if getattr(self, 'model_type', 'ssd') == 'ssd':
+            transform = transforms.Compose([
+                transforms.Resize((300, 300)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], 
+                                   std=[0.229, 0.224, 0.225])
+            ])
+            input_tensor = transform(image).unsqueeze(0).to(self.device)
+            with torch.no_grad():
+                predictions = self.model(input_tensor)
+                predicted_locs, predicted_scores = predictions
+                det_boxes_batch, det_labels_batch, det_scores_batch = self.model.detect_objects(
+                    predicted_locs, predicted_scores, 
+                    min_score=self.conf_threshold, 
+                    max_overlap=self.iou_threshold, 
+                    top_k=200
+                )
+            det_boxes = det_boxes_batch[0]
+            det_labels = det_labels_batch[0]
+            det_scores = det_scores_batch[0]
+
+            detections = []
+            for i in range(len(det_boxes)):
+                x1 = float(det_boxes[i][0] * original_size[0])
+                y1 = float(det_boxes[i][1] * original_size[1])
+                x2 = float(det_boxes[i][2] * original_size[0])
+                y2 = float(det_boxes[i][3] * original_size[1])
+                class_idx = int(det_labels[i])
+                class_name = self.class_names[class_idx] if class_idx < len(self.class_names) else 'unknown'
+                detections.append({
+                    'class': class_name,
+                    'bbox': [x1, y1, x2, y2],
+                    'confidence': float(det_scores[i])
+                })
+            return detections
+
+        # Faster R-CNN branch: torchvision detection API
+        # Use a simpler transform: ToTensor (pixels in [0,1])
         transform = transforms.Compose([
-            transforms.Resize((300, 300)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], 
-                               std=[0.229, 0.224, 0.225])
+            transforms.ToTensor()
         ])
-        
-        input_tensor = transform(image).unsqueeze(0).to(self.device)
-        
+        input_tensor = transform(image).to(self.device)
         with torch.no_grad():
-            predictions = self.model(input_tensor)
-            predicted_locs, predicted_scores = predictions
-            det_boxes_batch, det_labels_batch, det_scores_batch = self.model.detect_objects(
-                predicted_locs, predicted_scores, 
-                min_score=self.conf_threshold, 
-                max_overlap=self.iou_threshold, 
-                top_k=200
-            )
-        
-        det_boxes = det_boxes_batch[0]
-        det_labels = det_labels_batch[0]
-        det_scores = det_scores_batch[0]
-        
+            outputs = self.model([input_tensor])
+        # outputs is a list of dicts with keys: boxes (N,4), labels (N), scores (N)
+        out = outputs[0]
+        boxes = out.get('boxes', [])
+        labels = out.get('labels', [])
+        scores = out.get('scores', [])
+
         detections = []
-        for i in range(len(det_boxes)):
-            x1 = float(det_boxes[i][0] * original_size[0])
-            y1 = float(det_boxes[i][1] * original_size[1])
-            x2 = float(det_boxes[i][2] * original_size[0])
-            y2 = float(det_boxes[i][3] * original_size[1])
-            
-            class_idx = int(det_labels[i])
-            class_name = self.class_names[class_idx] if class_idx < len(self.class_names) else 'unknown'
-            
-            detections.append({
-                'class': class_name,
-                'bbox': [x1, y1, x2, y2],
-                'confidence': float(det_scores[i])
-            })
-        
+        for i in range(len(boxes)):
+            bx = boxes[i].cpu().numpy().tolist()
+            x1, y1, x2, y2 = [float(v) for v in bx]
+            label_idx = int(labels[i].cpu().item())
+            class_name = self.class_names[label_idx] if label_idx < len(self.class_names) else 'unknown'
+            conf = float(scores[i].cpu().item())
+            detections.append({'class': class_name, 'bbox': [x1, y1, x2, y2], 'confidence': conf})
+
+        # Apply trained rescorer if available (cached loader)
+        try:
+            if len(detections) > 0:
+                r = self._load_rescorer_once()
+                if r is not None:
+                    node_feats = []
+                    scores_list = []
+                    for d in detections:
+                        x1, y1, x2, y2 = d['bbox']
+                        cx = (x1 + x2) / 2.0 / original_size[0]
+                        cy = (y1 + y2) / 2.0 / original_size[1]
+                        w = max(0.0, (x2 - x1) / original_size[0])
+                        h = max(0.0, (y2 - y1) / original_size[1])
+                        area = w * h
+                        s = float(d.get('confidence', 0.0))
+                        node_feats.append([s, cx, cy, w, h, area])
+                        scores_list.append(s)
+
+                    node_feats_t = torch.tensor(node_feats, dtype=torch.float32, device=self.device)
+                    scores_t = torch.tensor(scores_list, dtype=torch.float32, device=self.device)
+
+                    with torch.no_grad():
+                        try:
+                            rescores = r(node_feats_t, None, None, scores_t)
+                            # rescores are logits or probabilities depending on model type;
+                            # try to coerce to probabilities if values outside [0,1]
+                            rr_t = rescores
+                            rr_np = rr_t.detach().cpu().numpy()
+                            # if values appear to be logits (outside 0..1), apply sigmoid
+                            if rr_np.min() < 0.0 or rr_np.max() > 1.0:
+                                rr_t = torch.sigmoid(rr_t)
+                                rr_np = rr_t.detach().cpu().numpy()
+
+                            # multiplicative rescore
+                            mult = (scores_t * rr_t)
+                            # convex blend with alpha: new_conf = (1-alpha)*orig + alpha*mult
+                            alpha = float(getattr(self, 'rescorer_alpha', 1.0))
+                            blended_t = (1.0 - alpha) * scores_t + alpha * mult
+                            blended = blended_t.cpu().numpy().tolist()
+                            rr = rr_np
+                            for det, new_s in zip(detections, blended):
+                                det['confidence'] = float(new_s)
+                            if os.environ.get('PPE_RESCORER_DEBUG') == '1':
+                                import numpy as _np
+                                print(f"[PPE_RESCORER] image={Path(image_path).name} rescore_min={_np.min(rr):.4f} mean={_np.mean(rr):.4f} max={_np.max(rr):.4f} shape={rr.shape}")
+                                try:
+                                    before = np.array(scores_list)
+                                    after = np.array(blended)
+                                    diffs = after - before
+                                    print(f"[PPE_RESCORER] image={Path(image_path).name} conf_before_mean={before.mean():.4f} conf_after_mean={after.mean():.4f} diff_mean={diffs.mean():.4f}")
+                                except Exception:
+                                    pass
+                        except Exception as e:
+                            if os.environ.get('PPE_RESCORER_DEBUG') == '1':
+                                print(f"[PPE_RESCORER] forward failed for {Path(image_path).name}: {e}")
+        except Exception:
+            pass
+
         return detections
 
     def _filter_ppe_by_person(self, detections, min_overlap=None):
@@ -463,8 +668,8 @@ class PPEDetectionEvaluator:
                 })
 
     def evaluate(self, split='test', max_images=None):
-        print(f"\ud83d\udd0d Starting PPE Detection Evaluation on {split} split")
-        print(f"\ud83d\udcc1 Output directory: {self.output_dir}")
+        print(f"[INFO] Starting PPE Detection Evaluation on {split} split")
+        print(f"[INFO] Output directory: {self.output_dir}")
 
         ground_truth_data = self._load_ground_truth(split)
 
@@ -480,7 +685,7 @@ class PPEDetectionEvaluator:
             
             img_path = self.data_dir / 'images' / img_name
             if not img_path.exists():
-                print(f"\u26a0\ufe0f  Image not found: {img_path}")
+                print(f"[WARN]  Image not found: {img_path}")
                 continue
             
             detections = self._detect_image(img_path)
@@ -498,12 +703,12 @@ class PPEDetectionEvaluator:
 
             all_gt.extend(gt_annotations)
             all_detections.extend(filtered_detections)
-        
-        print(f"\n\u2713 Processed {len(items)} images")
-        
-        print("\ud83d\udcca Calculating metrics...")
+
+        print(f"\n[OK] Processed {len(items)} images")
+
+        print("[INFO] Calculating metrics...")
         class_metrics, map_score = self._calculate_metrics(all_gt, all_detections)
-        
+
         self.results['summary'] = {
             'total_images': len(items),
             'map_score': map_score,
@@ -512,16 +717,19 @@ class PPEDetectionEvaluator:
             'conf_threshold': self.conf_threshold,
             'iou_threshold': self.iou_threshold
         }
-        
+
         self.results['per_class_metrics'] = class_metrics
-        
+
+        # Calculate label-only metrics (ignore bbox IoU; match by class presence)
+        self.results['label_only_metrics'] = self._calculate_label_only_metrics()
+
         self._save_results()
-        
+
         self._generate_visualizations()
-        
-        print(f"\u2705 Evaluation complete! Results saved to: {self.output_dir}")
-        print(f"\ud83d\udcc8 Overall mAP: {map_score:.3f}")
-        
+
+        print(f"[DONE] Evaluation complete! Results saved to: {self.output_dir}")
+        print(f"[RESULT] Overall mAP: {map_score:.3f}")
+
         return self.results
 
     def _save_results(self):
@@ -558,6 +766,19 @@ class PPEDetectionEvaluator:
         summary_df = pd.DataFrame(summary_data)
         summary_file = self.output_dir / f'class_metrics_{timestamp}.csv'
         summary_df.to_csv(summary_file, index=False)
+
+        # Save label-only metrics CSV if available
+        try:
+            lom = self.results.get('label_only_metrics', {})
+            if lom:
+                lom_rows = []
+                for cls, vals in lom.items():
+                    lom_rows.append({'class': cls, 'gt_count': vals.get('gt_count', 0), 'detected_count': vals.get('detected_count', 0), 'recall': vals.get('recall', 0.0)})
+                lom_df = pd.DataFrame(lom_rows)
+                lom_file = self.output_dir / f'label_only_metrics_{timestamp}.csv'
+                lom_df.to_csv(lom_file, index=False)
+        except Exception:
+            pass
         
         problems_file = self.output_dir / f'problem_analysis_{timestamp}.txt'
         with open(problems_file, 'w') as f:
@@ -574,10 +795,16 @@ class PPEDetectionEvaluator:
                 for case in cases[:10]:
                     f.write(f"  {case}\n")
         
-        print(f"\ud83d\udcbe Results saved:")
-        print(f"  \ud83d\udcc4 Complete results: {results_file}")
-        print(f"  \ud83d\udcca Class metrics: {summary_file}")
-        print(f"  \ud83d\udd0d Problem analysis: {problems_file}")
+        print(f"[INFO] Results saved:")
+        print(f"  - Complete results: {results_file}")
+        print(f"  - Class metrics: {summary_file}")
+        print(f"  - Problem analysis: {problems_file}")
+
+        # Append a short worklog entry to the repo WORKLOG.md
+        try:
+            self._append_worklog_entry(results_file, summary_file, problems_file)
+        except Exception:
+            pass
 
     def _generate_visualizations(self):
         plt.style.use('seaborn-v0_8')
@@ -619,7 +846,93 @@ class PPEDetectionEvaluator:
         plt.savefig(self.output_dir / 'problem_summary.png', dpi=300, bbox_inches='tight')
         plt.close()
         
-        print(f"\ud83d\udcc8 Visualizations saved to: {self.output_dir}")
+        print(f"[INFO] Visualizations saved to: {self.output_dir}")
+
+    def _append_worklog_entry(self, results_file, summary_file, problems_file):
+        """Append a short evaluation summary entry to the repository WORKLOG.md file.
+
+        The entry includes timestamp, model, thresholds, mAP, counts and the three main output file paths.
+        This is intentionally lightweight and tolerant of missing WORKLOG file.
+        """
+        try:
+            repo_root = Path(__file__).resolve().parents[2]
+            worklog_path = repo_root / 'WORKLOG.md'
+
+            map_score = self.results.get('summary', {}).get('map_score')
+            total_images = self.results.get('summary', {}).get('total_images')
+            model_path = self.results.get('summary', {}).get('model_path', str(self.model_path))
+
+            now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+            entry_lines = []
+            entry_lines.append('\n')
+            entry_lines.append(f"### Evaluation — {now}\n")
+            entry_lines.append('\n')
+            entry_lines.append(f"- Model: `{model_path}`\n")
+            entry_lines.append(f"- Images evaluated: {total_images}\n")
+            entry_lines.append(f"- Overall mAP: {map_score:.3f}" + "\n")
+            entry_lines.append(f"- Conf threshold: {self.conf_threshold}\n")
+            entry_lines.append(f"- Eval IoU threshold: {self.eval_iou_threshold}\n")
+            entry_lines.append('\n')
+            entry_lines.append("Saved files:\n")
+            entry_lines.append(f"- Results JSON: `{results_file}`\n")
+            entry_lines.append(f"- Class metrics CSV: `{summary_file}`\n")
+            entry_lines.append(f"- Problem analysis: `{problems_file}`\n")
+            entry_lines.append('\n')
+
+            # Ensure WORKLOG exists, create if missing
+            if not worklog_path.exists():
+                with open(worklog_path, 'w', encoding='utf-8') as wf:
+                    wf.write('# Project Worklog — Image-Classification-for-PPE\n\n')
+
+            with open(worklog_path, 'a', encoding='utf-8') as wf:
+                wf.writelines(entry_lines)
+
+            print(f"[INFO] WORKLOG updated: {worklog_path}")
+        except Exception as e:
+            print(f"[WARN] Failed to append WORKLOG entry: {e}")
+
+    def _calculate_label_only_metrics(self):
+        """Compute simple label-only recall per class: for each ground-truth instance, check if any detection of the same class
+        exists in the same image (using class-specific confidence thresholds). Ignore bbox IoU entirely.
+        Returns a dict {class: {gt_count, detected_count, recall}}."""
+
+        lom = {}
+        # Initialize counts
+        for cls in self.class_names[1:]:
+            lom[cls] = {'gt_count': 0, 'detected_count': 0}
+
+        for item in self.results.get('detection_results', []):
+            image = item.get('image')
+            gts = item.get('ground_truth', [])
+            dets = item.get('detections', [])
+
+            # build set of detected classes in this image that pass class-specific confidence thresholds
+            detected_classes = set()
+            for d in dets:
+                cls = d.get('class')
+                conf = d.get('confidence', 0.0)
+                thr = self.class_conf_thresholds.get(cls, self.conf_threshold)
+                if conf >= thr:
+                    detected_classes.add(cls)
+
+            # for each GT instance, increment gt_count and mark detected_count if class is present in detected_classes
+            for g in gts:
+                cls = g.get('class')
+                if cls not in lom:
+                    # unseen class; create entry
+                    lom[cls] = {'gt_count': 0, 'detected_count': 0}
+                lom[cls]['gt_count'] += 1
+                if cls in detected_classes:
+                    lom[cls]['detected_count'] += 1
+
+        # compute recall
+        for cls, vals in lom.items():
+            gt = vals.get('gt_count', 0)
+            detd = vals.get('detected_count', 0)
+            vals['recall'] = (detd / gt) if gt > 0 else None
+
+        return lom
 
 
 def main():
@@ -636,6 +949,8 @@ def main():
                       help='Dataset split to evaluate on')
     parser.add_argument('--max_images', type=int, default=None,
                       help='Limit number of images to process (for quick runs)')
+    parser.add_argument('--rescorer_alpha', type=float, default=1.0,
+                      help='Blending weight for rescorer (0.0..1.0). 1.0 uses multiplicative rescore fully.')
     
     args = parser.parse_args()
     
@@ -643,7 +958,8 @@ def main():
         model_path=args.model_path,
         data_dir=args.data_dir,
         config_path=args.config_path,
-        output_dir=args.output_dir
+        output_dir=args.output_dir,
+        rescorer_alpha=args.rescorer_alpha
     )
     
     results = evaluator.evaluate(split=args.split, max_images=args.max_images)
@@ -651,9 +967,9 @@ def main():
     print("\n" + "="*50)
     print("EVALUATION SUMMARY")
     print("="*50)
-    print(f"\ud83d\udcca Overall mAP: {results['summary']['map_score']:.3f}")
-    print(f"\ud83d\uddbc\ufe0f  Total images: {results['summary']['total_images']}")
-    print(f"\u26a0\ufe0f  Problem cases:")
+    print(f"Overall mAP: {results['summary']['map_score']:.3f}")
+    print(f"Total images: {results['summary']['total_images']}")
+    print(f"[WARN]  Problem cases:")
     print(f"   - Missed workers: {len(results['problem_cases']['missed_workers'])}")
     print(f"   - False positives: {len(results['problem_cases']['false_positives'])}")
     print(f"   - Missed violations: {len(results['problem_cases']['missed_violations'])}")

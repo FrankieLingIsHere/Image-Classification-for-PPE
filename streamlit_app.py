@@ -38,18 +38,21 @@ from typing import Optional
 
 # Import your hybrid model
 from src.models.hybrid_ppe_model import HybridPPEDescriptionModel
-# optional imports for postprocessing
+
+# Optional imports for postprocessing - add scripts to path BEFORE importing
 import sys
-sys.path.append(os.path.join(os.path.dirname(__file__), 'scripts'))
+scripts_path = os.path.join(os.path.dirname(__file__), 'scripts')
+if scripts_path not in sys.path:
+    sys.path.insert(0, scripts_path)
+
+_apply_per_class_nms = None
+_postprocess_persons = None
+
 try:
     from scripts.inference import _apply_per_class_nms, _postprocess_persons
-except Exception:
-    # fallback: import by module path
-    try:
-        from scripts.inference import _apply_per_class_nms, _postprocess_persons
-    except Exception:
-        _apply_per_class_nms = None
-        _postprocess_persons = None
+except ImportError as e:
+    # Postprocessing helpers not available - will use basic filtering
+    pass
 
 # Page configuration
 st.set_page_config(
@@ -461,10 +464,15 @@ def create_detection_chart(detections):
     # Count detections by class
     detection_counts = {}
     for det in detections:
-        class_name = det['class']
+        class_name = det.get('class', det.get('class_name', 'unknown'))
+        if not class_name:
+            continue
         if class_name not in detection_counts:
             detection_counts[class_name] = []
-        detection_counts[class_name].append(det['confidence'])
+        detection_counts[class_name].append(float(det.get('confidence', 0.0)))
+    
+    if not detection_counts:
+        return None
     
     # Create data for plotting
     classes = []
@@ -580,7 +588,7 @@ def main():
     detector_choice = st.sidebar.selectbox('Detector type', options=['auto', 'rcnn', 'ssd'], index=0, help='Choose which detector architecture to use')
 
     # Vision-language model selection for scene captioning
-    vision_model_choice = st.sidebar.selectbox('Vision-language model', options=['blip2', 'llava', 'none'], index=0, help='Choose a vision-language model for scene descriptions')
+    vision_model_choice = st.sidebar.selectbox('Vision-language model', options=['blip2', 'llava', 'llava-mini', 'none'], index=0, help='Choose a vision-language model for scene descriptions')
     vision_checkpoint_input = st.sidebar.text_input('Vision model checkpoint / hub-id (optional)', value='')
     if st.sidebar.button('Reload model'):
         # clear cache and reload on demand
@@ -775,16 +783,19 @@ def main():
 
         # Compliance status
         st.markdown("### 🚨 Compliance Status")
-        compliance_status = results['ppe_descriptions']['compliance_status']
         
-        if "COMPLIANT" in compliance_status and "NON-COMPLIANCE" not in compliance_status:
+        # Safely access nested dictionary with fallbacks
+        compliance_status = results.get('ppe_descriptions', {}).get('compliance_status', 'UNKNOWN STATUS')
+        
+        if "COMPLIANT" in str(compliance_status) and "NON-COMPLIANCE" not in str(compliance_status):
             st.markdown(f'<div class="detection-box compliance-good"><h4>✅ {compliance_status}</h4></div>', unsafe_allow_html=True)
         else:
             st.markdown(f'<div class="detection-box compliance-bad"><h4>❌ {compliance_status}</h4></div>', unsafe_allow_html=True)
         
         # Safety summary
         st.markdown("### 🦺 Safety Summary")
-        st.info(results['ppe_descriptions']['safety_summary'])
+        safety_summary = results.get('ppe_descriptions', {}).get('safety_summary', 'Analysis unavailable')
+        st.info(safety_summary)
         
         # Scene description
         if results.get('general_caption'):
@@ -800,32 +811,45 @@ def main():
             if fig:
                 st.plotly_chart(fig, use_container_width=True)
             
-            # Detailed detection list
+                # Detailed detection list
             if show_detailed_analysis:
                 st.markdown("### 🔍 Detailed Detections")
                 
                 # Create DataFrame for better display
                 detection_data = []
                 for i, det in enumerate(filtered_detections):
-                    detection_data.append({
-                        'Item': det['class'],
-                        'Confidence': f"{det['confidence']:.3f}",
-                        'Category': 'Person' if det['class'] == 'person' else ('Violation' if det['class'].startswith('no_') else 'PPE'),
-                        'Bounding Box': f"[{det['bbox'][0]:.0f}, {det['bbox'][1]:.0f}, {det['bbox'][2]:.0f}, {det['bbox'][3]:.0f}]"
-                    })
+                    try:
+                        class_name = det.get('class', det.get('class_name', 'unknown'))
+                        confidence = float(det.get('confidence', 0.0))
+                        bbox = det.get('bbox', [0, 0, 0, 0])
+                        
+                        # Validate bbox has 4 elements
+                        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+                            bbox = [0, 0, 0, 0]
+                        
+                        detection_data.append({
+                            'Item': class_name,
+                            'Confidence': f"{confidence:.3f}",
+                            'Category': 'Person' if class_name == 'person' else ('Violation' if class_name.startswith('no_') else 'PPE'),
+                            'Bounding Box': f"[{bbox[0]:.0f}, {bbox[1]:.0f}, {bbox[2]:.0f}, {bbox[3]:.0f}]"
+                        })
+                    except Exception as e:
+                        st.warning(f"Could not process detection {i}: {e}")
+                        continue
                 
-                df = pd.DataFrame(detection_data)
-                st.dataframe(df, use_container_width=True)
-        
-        # Technical details
+                if detection_data:
+                    df = pd.DataFrame(detection_data)
+                    st.dataframe(df, use_container_width=True)        # Technical details
         if show_detailed_analysis:
             st.markdown("### 🔧 Technical Analysis")
-            st.text(results['ppe_descriptions']['detailed_analysis'])
+            detailed_analysis = results.get('ppe_descriptions', {}).get('detailed_analysis', 'Technical analysis unavailable')
+            st.text(detailed_analysis)
         
         # Download results
         st.markdown("### 💾 Export Results")
         
         # Prepare data for download
+        ppe_descriptions = results.get('ppe_descriptions', {})
         export_data = {
             'timestamp': datetime.now().isoformat(),
             'image_name': uploaded_file.name,
@@ -835,9 +859,9 @@ def main():
             'good_ppe_count': good_ppe_count,
             'violation_count': violation_count,
             'compliance_status': compliance_status,
-            'safety_summary': results['ppe_descriptions']['safety_summary'],
+            'safety_summary': ppe_descriptions.get('safety_summary', ''),
             'scene_description': results.get('general_caption', ''),
-            'detailed_analysis': results['ppe_descriptions']['detailed_analysis'],
+            'detailed_analysis': ppe_descriptions.get('detailed_analysis', ''),
             'detections': filtered_detections
         }
         

@@ -39,6 +39,8 @@ results/
 *.json
 *.txt
 *.csv
+*.doc
+*.pdf
 *.docx
 
 # Environment
@@ -46,13 +48,14 @@ results/
 .venv
 env/
 venv/
+.venv/
 ENV/
 env.bak/
 venv.bak/
 
 # IDE
 .vscode/
-.idea/
+.idea/g
 *.swp
 *.swo
 *~
@@ -76,3 +79,4 @@ events.out.tfevents.*
 *.tmp
 *.temp
 /tmp/
+*.pth

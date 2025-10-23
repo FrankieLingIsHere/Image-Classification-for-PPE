@@ -80,3 +80,227 @@ Deliverables by end of Week 4
 ---
 
 If you'd like, I can apply the planned Week 4 changes now (create the tuning/import/demo scripts and run quick local validations). Tell me which subset to prioritize: run the Label Studio pilot, implement the tuning harness, or scaffold the import/demo scripts first.
+
+### Evaluation — 2025-10-11 20:47:43
+
+- Model: `models/best_model_regularized.pth`
+- Images evaluated: 5
+- Overall mAP: 0.055
+- Conf threshold: 0.05
+- Eval IoU threshold: 0.5
+
+Saved files:
+- Results JSON: `outputs\eval_test\evaluation_results_20251011_204743.json`
+- Class metrics CSV: `outputs\eval_test\class_metrics_20251011_204743.csv`
+- Problem analysis: `outputs\eval_test\problem_analysis_20251011_204743.txt`
+
+
+### Evaluation — 2025-10-11 20:49:10
+
+- Model: `models/best_model_regularized.pth`
+- Images evaluated: 5
+- Overall mAP: 0.055
+- Conf threshold: 0.05
+- Eval IoU threshold: 0.5
+
+Saved files:
+- Results JSON: `outputs\eval_test_no_rescorer\evaluation_results_20251011_204910.json`
+- Class metrics CSV: `outputs\eval_test_no_rescorer\class_metrics_20251011_204910.csv`
+- Problem analysis: `outputs\eval_test_no_rescorer\problem_analysis_20251011_204910.txt`
+
+
+### Evaluation — 2025-10-11 20:50:55
+
+- Model: `models/rcnn_baseline_adamw.pth`
+- Images evaluated: 25
+- Overall mAP: 0.285
+- Conf threshold: 0.05
+- Eval IoU threshold: 0.5
+
+Saved files:
+- Results JSON: `outputs\eval_rcnn_with_rescorer\evaluation_results_20251011_205055.json`
+- Class metrics CSV: `outputs\eval_rcnn_with_rescorer\class_metrics_20251011_205055.csv`
+- Problem analysis: `outputs\eval_rcnn_with_rescorer\problem_analysis_20251011_205055.txt`
+
+
+### Evaluation — 2025-10-11 20:53:08
+
+- Model: `models/rcnn_baseline.pth`
+- Images evaluated: 25
+- Overall mAP: 0.266
+- Conf threshold: 0.05
+- Eval IoU threshold: 0.5
+
+Saved files:
+- Results JSON: `outputs\eval_rcnn_baseline_with_rescorer\evaluation_results_20251011_205308.json`
+- Class metrics CSV: `outputs\eval_rcnn_baseline_with_rescorer\class_metrics_20251011_205308.csv`
+- Problem analysis: `outputs\eval_rcnn_baseline_with_rescorer\problem_analysis_20251011_205308.txt`
+
+
+### Evaluation — 2025-10-11 20:54:39
+
+- Model: `models/rcnn_baseline.pth`
+- Images evaluated: 25
+- Overall mAP: 0.266
+- Conf threshold: 0.05
+- Eval IoU threshold: 0.5
+
+Saved files:
+- Results JSON: `outputs\eval_rcnn_baseline_no_rescorer\evaluation_results_20251011_205439.json`
+- Class metrics CSV: `outputs\eval_rcnn_baseline_no_rescorer\class_metrics_20251011_205439.csv`
+- Problem analysis: `outputs\eval_rcnn_baseline_no_rescorer\problem_analysis_20251011_205439.txt`
+
+
+### Evaluation — 2025-10-11 21:37:22
+
+- Model: `models/rcnn_baseline.pth`
+- Images evaluated: 5
+- Overall mAP: 0.150
+- Conf threshold: 0.5
+- Eval IoU threshold: 0.5
+
+Saved files:
+- Results JSON: `outputs\evaluation_results\evaluation_results_20251011_213722.json`
+- Class metrics CSV: `outputs\evaluation_results\class_metrics_20251011_213722.csv`
+- Problem analysis: `outputs\evaluation_results\problem_analysis_20251011_213722.txt`
+
+
+### Evaluation — 2025-10-11 21:38:21
+
+- Model: `models/rcnn_baseline.pth`
+- Images evaluated: 5
+- Overall mAP: 0.150
+- Conf threshold: 0.5
+- Eval IoU threshold: 0.5
+
+Saved files:
+- Results JSON: `outputs\evaluation_results\evaluation_results_20251011_213821.json`
+- Class metrics CSV: `outputs\evaluation_results\class_metrics_20251011_213821.csv`
+- Problem analysis: `outputs\evaluation_results\problem_analysis_20251011_213821.txt`
+
+
+### Evaluation — 2025-10-11 21:39:49
+
+- Model: `models/rcnn_baseline.pth`
+- Images evaluated: 5
+- Overall mAP: 0.150
+- Conf threshold: 0.5
+- Eval IoU threshold: 0.5
+
+Saved files:
+- Results JSON: `outputs\evaluation_results\evaluation_results_20251011_213949.json`
+- Class metrics CSV: `outputs\evaluation_results\class_metrics_20251011_213949.csv`
+- Problem analysis: `outputs\evaluation_results\problem_analysis_20251011_213949.txt`
+
+
+### Evaluation — 2025-10-11 21:45:41
+
+- Model: `models/rcnn_baseline.pth`
+- Images evaluated: 5
+- Overall mAP: 0.150
+- Conf threshold: 0.5
+- Eval IoU threshold: 0.5
+
+Saved files:
+- Results JSON: `outputs\evaluation_results\evaluation_results_20251011_214541.json`
+- Class metrics CSV: `outputs\evaluation_results\class_metrics_20251011_214541.csv`
+- Problem analysis: `outputs\evaluation_results\problem_analysis_20251011_214541.txt`
+
+
+### Evaluation — 2025-10-11 22:19:12
+
+- Model: `models\rcnn_baseline.pth`
+- Images evaluated: 25
+- Overall mAP: 0.180
+- Conf threshold: 0.5
+- Eval IoU threshold: 0.5
+
+Saved files:
+- Results JSON: `outputs\evaluation_results\rescorer_test\evaluation_results_20251011_221912.json`
+- Class metrics CSV: `outputs\evaluation_results\rescorer_test\class_metrics_20251011_221912.csv`
+- Problem analysis: `outputs\evaluation_results\rescorer_test\problem_analysis_20251011_221912.txt`
+
+
+### Evaluation — 2025-10-11 22:20:54
+
+- Model: `models\rcnn_baseline.pth`
+- Images evaluated: 25
+- Overall mAP: 0.185
+- Conf threshold: 0.5
+- Eval IoU threshold: 0.5
+
+Saved files:
+- Results JSON: `outputs\evaluation_results\baseline_test\evaluation_results_20251011_222054.json`
+- Class metrics CSV: `outputs\evaluation_results\baseline_test\class_metrics_20251011_222054.csv`
+- Problem analysis: `outputs\evaluation_results\baseline_test\problem_analysis_20251011_222054.txt`
+
+
+### Evaluation — 2025-10-11 22:22:32
+
+- Model: `models\rcnn_baseline.pth`
+- Images evaluated: 25
+- Overall mAP: 0.185
+- Conf threshold: 0.5
+- Eval IoU threshold: 0.5
+
+Saved files:
+- Results JSON: `outputs\evaluation_results\baseline_true\evaluation_results_20251011_222232.json`
+- Class metrics CSV: `outputs\evaluation_results\baseline_true\class_metrics_20251011_222232.csv`
+- Problem analysis: `outputs\evaluation_results\baseline_true\problem_analysis_20251011_222232.txt`
+
+
+### Evaluation — 2025-10-11 22:36:26
+
+- Model: `models\rcnn_baseline.pth`
+- Images evaluated: 25
+- Overall mAP: 0.185
+- Conf threshold: 0.5
+- Eval IoU threshold: 0.5
+
+Saved files:
+- Results JSON: `outputs\evaluation_results\gat_test\evaluation_results_20251011_223626.json`
+- Class metrics CSV: `outputs\evaluation_results\gat_test\class_metrics_20251011_223626.csv`
+- Problem analysis: `outputs\evaluation_results\gat_test\problem_analysis_20251011_223626.txt`
+
+
+### Evaluation — 2025-10-11 22:43:24
+
+- Model: `models\rcnn_baseline.pth`
+- Images evaluated: 25
+- Overall mAP: 0.183
+- Conf threshold: 0.5
+- Eval IoU threshold: 0.5
+
+Saved files:
+- Results JSON: `outputs\evaluation_results\gat_test2\evaluation_results_20251011_224324.json`
+- Class metrics CSV: `outputs\evaluation_results\gat_test2\class_metrics_20251011_224324.csv`
+- Problem analysis: `outputs\evaluation_results\gat_test2\problem_analysis_20251011_224324.txt`
+
+
+### Evaluation — 2025-10-11 23:00:22
+
+- Model: `models\rcnn_baseline.pth`
+- Images evaluated: 25
+- Overall mAP: 0.182
+- Conf threshold: 0.5
+- Eval IoU threshold: 0.5
+
+Saved files:
+- Results JSON: `outputs\evaluation_results\retrained_gat\evaluation_results_20251011_230022.json`
+- Class metrics CSV: `outputs\evaluation_results\retrained_gat\class_metrics_20251011_230022.csv`
+- Problem analysis: `outputs\evaluation_results\retrained_gat\problem_analysis_20251011_230022.txt`
+
+
+### Evaluation — 2025-10-11 23:52:37
+
+- Model: `models\rcnn_baseline.pth`
+- Images evaluated: 25
+- Overall mAP: 0.185
+- Conf threshold: 0.5
+- Eval IoU threshold: 0.5
+
+Saved files:
+- Results JSON: `outputs\evaluation_results\retrained_gat_alpha06\evaluation_results_20251011_235237.json`
+- Class metrics CSV: `outputs\evaluation_results\retrained_gat_alpha06\class_metrics_20251011_235237.csv`
+- Problem analysis: `outputs\evaluation_results\retrained_gat_alpha06\problem_analysis_20251011_235237.txt`
+
