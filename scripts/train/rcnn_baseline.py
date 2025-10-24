@@ -58,7 +58,18 @@ class TorchvisionPPEDataset(Dataset):
     def __getitem__(self, idx):
         info = self.images_info[idx]
         img_path = info['filename']
-        img = Image.open(img_path).convert('RGB')
+        
+        # Try to load image, skip if corrupted
+        try:
+            img = Image.open(img_path).convert('RGB')
+        except Exception as e:
+            print(f"WARNING: Could not load image {img_path}: {e}. Returning fallback image.")
+            # Return a blank image with no detections as fallback
+            img = Image.new('RGB', (300, 300), color='gray')
+            return self.transforms(img), {'boxes': torch.zeros((0, 4), dtype=torch.float32), 
+                                          'labels': torch.zeros((0,), dtype=torch.int64),
+                                          'image_id': torch.tensor([idx])}, info['img_id']
+        
         w, h = img.size
 
         # Build target dict expected by torchvision models
