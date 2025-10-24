@@ -1,0 +1,157 @@
+import math
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from typing import Optional
+
+
+class RelationalRescorer(nn.Module):
+    """Lightweight relational rescorer for detection-level graphs.
+
+    This module is intended as an inference-time POC that uses only
+    detection-level features (confidence, normalized box coords, area,
+    and class id) to compute a context-aware rescore for each proposal.
+
+    It is intentionally small: a class embedding + one attention-like
+    aggregation layer and a tiny MLP scorer.
+    """
+
+    def __init__(self, num_classes: int, node_feat_dim: int = 6, emb_dim: int = 16, hidden: int = 64):
+        super().__init__()
+        self.num_classes = num_classes
+        self.node_feat_dim = node_feat_dim
+        self.emb_dim = emb_dim
+
+        # Class embedding to provide category context
+        self.class_emb = nn.Embedding(num_classes, emb_dim)
+
+        # Project node-level input (score, cx, cy, w, h, area) + class emb -> hidden
+        self.node_proj = nn.Linear(node_feat_dim + emb_dim, hidden)
+
+        # Simple attention parameters (single-head) using projected queries/keys/values
+        self.q_proj = nn.Linear(hidden, hidden)
+        self.k_proj = nn.Linear(hidden, hidden)
+        self.v_proj = nn.Linear(hidden, hidden)
+
+        # MLP to produce final rescore logit
+        self.mlp = nn.Sequential(
+            nn.Linear(hidden + node_feat_dim, hidden // 2),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden // 2, 1)
+        )
+
+        # Initialization
+        self._init_weights()
+
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+
+    def _pairwise_iou(self, boxes: torch.Tensor) -> torch.Tensor:
+        """Compute pairwise IoU for boxes in normalized coords [N,4] -> [N,N].
+
+        boxes: (N,4) in [x1,y1,x2,y2] normalized coordinates
+        """
+        if boxes.numel() == 0:
+            return boxes.new_zeros((0, 0))
+
+        x1 = boxes[:, 0].unsqueeze(1)
+        y1 = boxes[:, 1].unsqueeze(1)
+        x2 = boxes[:, 2].unsqueeze(1)
+        y2 = boxes[:, 3].unsqueeze(1)
+
+        x1_b = boxes[:, 0].unsqueeze(0)
+        y1_b = boxes[:, 1].unsqueeze(0)
+        x2_b = boxes[:, 2].unsqueeze(0)
+        y2_b = boxes[:, 3].unsqueeze(0)
+
+        inter_x1 = torch.max(x1, x1_b)
+        inter_y1 = torch.max(y1, y1_b)
+        inter_x2 = torch.min(x2, x2_b)
+        inter_y2 = torch.min(y2, y2_b)
+
+        inter_w = (inter_x2 - inter_x1).clamp(min=0)
+        inter_h = (inter_y2 - inter_y1).clamp(min=0)
+        inter_area = inter_w * inter_h
+
+        area_a = (x2 - x1).clamp(min=0) * (y2 - y1).clamp(min=0)
+        area_b = (x2_b - x1_b).clamp(min=0) * (y2_b - y1_b).clamp(min=0)
+
+        union = area_a + area_b - inter_area
+        # avoid div-by-zero
+        iou = torch.zeros_like(inter_area)
+        valid = union > 0
+        iou[valid] = (inter_area[valid] / union[valid]).clamp(min=0.0, max=1.0)
+        return iou
+
+    def forward(self, node_feats: torch.Tensor, boxes: torch.Tensor, labels: torch.Tensor, scores: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Compute adjusted rescore for each node.
+
+        Args:
+            node_feats: (N, node_feat_dim) tensor of basic numeric features
+            boxes: (N,4) normalized boxes [x1,y1,x2,y2]
+            labels: (N,) long tensor of class ids
+            scores: (N,) optional original confidences
+
+        Returns:
+            rescores: (N,) tensor in [0,1] indicating helpfulness/confidence
+        """
+        # node_feats: expected float tensor
+        if node_feats.numel() == 0:
+            return node_feats.new_zeros((0,))
+
+        # class embedding
+        class_e = self.class_emb(labels.long())  # (N, emb_dim)
+
+        x = torch.cat([node_feats, class_e], dim=1)  # (N, node_feat_dim+emb)
+        h = F.relu(self.node_proj(x))  # (N, hidden)
+
+        q = self.q_proj(h)  # (N, hidden)
+        k = self.k_proj(h)
+        v = self.v_proj(h)
+
+        # Scaled dot-product attention
+        d_k = q.size(-1)
+        attn_logits = (q @ k.t()) / math.sqrt(max(1, d_k))  # (N,N)
+
+        # incorporate spatial prior via IoU and center distance
+        iou = self._pairwise_iou(boxes)  # (N,N)
+
+        # center distance gaussian
+        centers = torch.stack([(boxes[:,0]+boxes[:,2])/2.0, (boxes[:,1]+boxes[:,3])/2.0], dim=1)
+        diff = centers.unsqueeze(1) - centers.unsqueeze(0)  # (N,N,2)
+        dist = torch.sqrt((diff**2).sum(-1) + 1e-6)
+        # convert normalized distance to proximity score
+        proximity = torch.exp(- (dist * 5.0))  # tuneable scalar
+
+        # Combine priors: give higher weight to pairs with higher IoU or proximity
+        spatial_prior = (iou + proximity) / 2.0
+
+        # Merge spatial prior into attention logits (additive)
+        attn_logits = attn_logits + (spatial_prior - 0.5)  # shift to have negative/positive
+
+        attn = F.softmax(attn_logits, dim=1)  # aggregate over neighbors
+
+        context = attn @ v  # (N, hidden)
+
+        updated = h + context
+
+        # Final scoring MLP uses updated features + raw node numeric features
+        combined = torch.cat([updated, node_feats], dim=1)
+        logits = self.mlp(combined).squeeze(-1)
+
+        rescores = torch.sigmoid(logits)
+        return rescores
+
+
+if __name__ == '__main__':
+    # small sanity check
+    m = RelationalRescorer(num_classes=12)
+    nodes = torch.rand((5,6))
+    boxes = torch.rand((5,4))
+    labels = torch.randint(0,12,(5,))
+    out = m(nodes, boxes, labels)
+    print('rescores', out.shape)

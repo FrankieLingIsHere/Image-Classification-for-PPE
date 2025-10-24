@@ -29,7 +29,7 @@ MANIFEST
 # Data files
 data/images/
 data/annotations/
-models/
+/models/
 logs/
 results/
 *.jpg
