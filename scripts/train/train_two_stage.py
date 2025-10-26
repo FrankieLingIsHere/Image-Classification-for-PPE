@@ -200,6 +200,7 @@ def train_stage(stage_name, model, train_loader, val_loader, num_epochs, lr, dev
     print(f"\n{'='*80}")
     print(f"TRAINING STAGE: {stage_name.upper()}")
     print(f"{'='*80}")
+    print(f"Train batches: {len(train_loader)}, Val batches: {len(val_loader)}")
     
     # Calculate class weights from training data
     class_weights = calculate_class_weights(train_loader, model.roi_heads.box_predictor.cls_score.out_features)
@@ -258,6 +259,7 @@ def train_stage(stage_name, model, train_loader, val_loader, num_epochs, lr, dev
         
         print(f"\n[OK] Epoch {epoch+1}/{num_epochs}")
         print(f"  Train Loss: {train_loss:.6f}")
+        print(f"  Val Loss: {val_loss:.6f} (batches processed: {val_count})")
         print(f"  Val Loss: {val_loss:.6f}")
         
         # Save best model
@@ -307,6 +309,8 @@ def main():
     
     stage1_train_loader = DataLoader(stage1_train, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn, num_workers=0)
     stage1_val_loader = DataLoader(stage1_val, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn, num_workers=0)
+    
+    print(f"Stage 1 DataLoaders - Train batches: {len(stage1_train_loader)}, Val batches: {len(stage1_val_loader)}")
     
     stage1_model = create_model(num_classes=2, pretrained=True)  # background + person
     stage1_model, stage1_history = train_stage(
