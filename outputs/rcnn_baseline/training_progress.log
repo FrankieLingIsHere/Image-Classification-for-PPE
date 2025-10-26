@@ -1,0 +1,15 @@
+Epoch 1/15  avg loss: 1.1604  components: loss_classifier:0.4507, loss_box_reg:0.2802, loss_objectness:0.3388, loss_rpn_box_reg:0.0907
+Epoch 2/15  avg loss: 1.0852  components: loss_classifier:0.4274, loss_box_reg:0.2894, loss_objectness:0.2834, loss_rpn_box_reg:0.0849
+Epoch 3/15  avg loss: 1.0652  components: loss_classifier:0.4194, loss_box_reg:0.2862, loss_objectness:0.2741, loss_rpn_box_reg:0.0855
+Epoch 4/15  avg loss: 1.0521  components: loss_classifier:0.4179, loss_box_reg:0.2884, loss_objectness:0.2633, loss_rpn_box_reg:0.0826
+Epoch 5/15  avg loss: 1.0567  components: loss_classifier:0.4168, loss_box_reg:0.2966, loss_objectness:0.2613, loss_rpn_box_reg:0.0821
+Epoch 6/15  avg loss: 1.0431  components: loss_classifier:0.4123, loss_box_reg:0.2958, loss_objectness:0.2548, loss_rpn_box_reg:0.0802
+Epoch 7/15  avg loss: 1.0409  components: loss_classifier:0.4115, loss_box_reg:0.2969, loss_objectness:0.2521, loss_rpn_box_reg:0.0804
+Epoch 8/15  avg loss: 1.0469  components: loss_classifier:0.4117, loss_box_reg:0.2981, loss_objectness:0.2570, loss_rpn_box_reg:0.0801
+Epoch 9/15  avg loss: 1.0282  components: loss_classifier:0.4044, loss_box_reg:0.2936, loss_objectness:0.2499, loss_rpn_box_reg:0.0804
+Epoch 10/15  avg loss: 1.0354  components: loss_classifier:0.4052, loss_box_reg:0.2955, loss_objectness:0.2544, loss_rpn_box_reg:0.0803
+Epoch 11/15  avg loss: 1.0319  components: loss_classifier:0.4065, loss_box_reg:0.2956, loss_objectness:0.2508, loss_rpn_box_reg:0.0790
+Epoch 12/15  avg loss: 1.0305  components: loss_classifier:0.4050, loss_box_reg:0.2943, loss_objectness:0.2509, loss_rpn_box_reg:0.0804
+Epoch 13/15  avg loss: 1.0339  components: loss_classifier:0.4066, loss_box_reg:0.2995, loss_objectness:0.2476, loss_rpn_box_reg:0.0802
+Epoch 14/15  avg loss: 1.0326  components: loss_classifier:0.4074, loss_box_reg:0.2980, loss_objectness:0.2478, loss_rpn_box_reg:0.0795
+Epoch 15/15  avg loss: 1.0283  components: loss_classifier:0.4032, loss_box_reg:0.2942, loss_objectness:0.2506, loss_rpn_box_reg:0.0803

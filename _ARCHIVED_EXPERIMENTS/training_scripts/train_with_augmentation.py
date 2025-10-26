@@ -314,6 +314,10 @@ def validate_model(model, val_loader, criterion, device):
         for batch_idx, (images, bboxes_list, labels_list, filenames) in enumerate(val_loader):
             images = images.to(device)
             
+            # Move bboxes and labels to device
+            bboxes_list = [bbox.to(device) if isinstance(bbox, torch.Tensor) else bbox for bbox in bboxes_list]
+            labels_list = [label.to(device) if isinstance(label, torch.Tensor) else label for label in labels_list]
+            
             # Forward pass
             loc_preds, class_preds = model(images)
             
@@ -454,6 +458,10 @@ def train_with_augmentation(args):
         
         for batch_idx, (images, bboxes_list, labels_list, filenames) in enumerate(train_loader):
             images = images.to(device)
+            
+            # Move bboxes and labels to device
+            bboxes_list = [bbox.to(device) if isinstance(bbox, torch.Tensor) else bbox for bbox in bboxes_list]
+            labels_list = [label.to(device) if isinstance(label, torch.Tensor) else label for label in labels_list]
             
             optimizer.zero_grad()
             

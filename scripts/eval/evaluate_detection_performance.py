@@ -89,7 +89,9 @@ class PPEDetectionEvaluator:
         # alpha=0.0 => ignore rescorer
         self.rescorer_alpha = float(rescorer_alpha)
 
-        self.conf_threshold = 0.5
+        # NOTE: Enhanced model outputs lower confidence scores, so use lower threshold
+        # Baseline uses 0.05, enhanced model avg confidence is 0.125, so 0.1 is reasonable
+        self.conf_threshold = 0.1
         self.iou_threshold = 0.45
         self.eval_iou_threshold = 0.5
         self.person_overlap_threshold = 0.3
@@ -140,31 +142,42 @@ class PPEDetectionEvaluator:
 
     def _load_model(self):
         print(f"Loading model from: {self.model_path}")
-        if os.path.exists(self.model_path):
-            checkpoint = torch.load(self.model_path, map_location='cpu')
-            if 'model_state_dict' in checkpoint:
-                state_dict = checkpoint['model_state_dict']
-            else:
-                state_dict = checkpoint
-            if 'pred_convs.cl_conv4_3.weight' in state_dict:
-                cl_weight_shape = state_dict['pred_convs.cl_conv4_3.weight'].shape[0]
-                n_classes_from_checkpoint = cl_weight_shape // 4
-                print(f"Detected {n_classes_from_checkpoint} classes from checkpoint")
-                if n_classes_from_checkpoint != len(self.class_names):
-                    print(f"Adjusting class count from {len(self.class_names)} to {n_classes_from_checkpoint}")
-                    if n_classes_from_checkpoint > len(self.class_names):
-                        while len(self.class_names) < n_classes_from_checkpoint:
-                            self.class_names.append(f'class_{len(self.class_names)}')
-                    else:
-                        self.class_names = self.class_names[:n_classes_from_checkpoint]
-            else:
-                n_classes_from_checkpoint = len(self.class_names)
-        else:
-            n_classes_from_checkpoint = len(self.class_names)
-
-        # First attempt: SSD model (backwards-compatible)
+        num_classes = len(self.class_names)
+        
+        # First attempt: Enhanced PPE Detector (current/best model type)
         try:
-            model = build_ssd_model(num_classes=n_classes_from_checkpoint)
+            from src.models.enhanced_ppe_detector import EnhancedPPEDetector
+            print("Attempting to load EnhancedPPEDetector...")
+            
+            if os.path.exists(self.model_path):
+                checkpoint = torch.load(self.model_path, map_location=self.device)
+                model_state_dict = checkpoint.get('model_state_dict', checkpoint)
+                
+                # Check if this looks like an EnhancedPPEDetector checkpoint
+                # EnhancedPPEDetector has 'detector.' and 'seg_head.' and 'spatial_constraints.' prefixes
+                has_detector = any(k.startswith('detector.') for k in model_state_dict.keys())
+                has_seg = any(k.startswith('seg_head.') for k in model_state_dict.keys())
+                has_spatial = any(k.startswith('spatial_constraints.') for k in model_state_dict.keys())
+                
+                if has_detector:
+                    print("[INFO] Detected EnhancedPPEDetector architecture in checkpoint")
+                    model = EnhancedPPEDetector(num_classes=num_classes, pretrained_backbone_path=None)
+                    model.load_state_dict(model_state_dict)
+                    print("[OK] EnhancedPPEDetector loaded successfully")
+                    self.model_type = 'enhanced_ppe'
+                    model.to(self.device)
+                    model.eval()
+                    return model
+            else:
+                print("[WARN] Model file not found")
+                
+        except Exception as e:
+            print(f"[WARN] EnhancedPPEDetector load failed: {e}")
+
+        # Second attempt: SSD model (backwards-compatible)
+        try:
+            print("Attempting to load SSD model...")
+            model = build_ssd_model(num_classes=num_classes)
             if os.path.exists(self.model_path):
                 checkpoint = torch.load(self.model_path, map_location=self.device)
                 sd = checkpoint.get('model_state_dict', checkpoint)
@@ -172,39 +185,45 @@ class PPEDetectionEvaluator:
                     model.load_state_dict(sd)
                     print("[OK] SSD model loaded successfully")
                     self.model_type = 'ssd'
+                    model.to(self.device)
+                    model.eval()
+                    return model
                 except Exception as e:
-                    # If SSD load failed, fall through to try RCNN
-                    print(f"[WARN] SSD load failed ({e}), attempting Faster R-CNN load...")
+                    print(f"[WARN] SSD load failed: {e}, attempting Faster R-CNN...")
                     raise
             else:
-                print("[WARN]  Model file not found, using random SSD weights")
+                print("[WARN] Model file not found, using random SSD weights")
                 self.model_type = 'ssd'
+                model.to(self.device)
+                model.eval()
+                return model
 
         except Exception:
-            # Try loading as a Faster R-CNN checkpoint (common for rcnn_baseline.pth)
-            try:
-                print("Attempting to construct Faster R-CNN model (resnet50_fpn)")
-                model = fasterrcnn_resnet50_fpn(pretrained=False, num_classes=n_classes_from_checkpoint)
-                if os.path.exists(self.model_path):
-                    checkpoint = torch.load(self.model_path, map_location=self.device)
-                    sd = checkpoint.get('model_state_dict', checkpoint)
-                    try:
-                        # Attempt a non-strict load to tolerate small key differences
-                        model.load_state_dict(sd, strict=False)
-                        print("[OK] Faster R-CNN loaded (partial/relaxed match)")
-                    except Exception as ee:
-                        print(f"[WARN] Faster R-CNN load warning: {ee}")
-                else:
-                    print("[WARN]  Model file not found, using random R-CNN weights")
+            pass
 
-                self.model_type = 'rcnn'
-            except Exception as final_e:
-                # If both fail, re-raise the original error
-                raise RuntimeError(f"Failed to load model as SSD or Faster R-CNN: {final_e}")
+        # Third attempt: Faster R-CNN checkpoint (fallback)
+        try:
+            print("Attempting to load Faster R-CNN model...")
+            model = fasterrcnn_resnet50_fpn(pretrained=False, num_classes=num_classes)
+            if os.path.exists(self.model_path):
+                checkpoint = torch.load(self.model_path, map_location=self.device)
+                sd = checkpoint.get('model_state_dict', checkpoint)
+                try:
+                    # Attempt a non-strict load to tolerate small key differences
+                    model.load_state_dict(sd, strict=False)
+                    print("[OK] Faster R-CNN loaded (partial/relaxed match)")
+                except Exception as ee:
+                    print(f"[WARN] Faster R-CNN load warning: {ee}")
+            else:
+                print("[WARN] Model file not found, using random R-CNN weights")
 
-        model.to(self.device)
-        model.eval()
-        return model
+            self.model_type = 'rcnn'
+            model.to(self.device)
+            model.eval()
+            return model
+            
+        except Exception as final_e:
+            raise RuntimeError(f"Failed to load model as EnhancedPPEDetector, SSD, or Faster R-CNN: {final_e}")
 
     def _load_rescorer_once(self):
         """Load the RelationalRescorer from disk once and cache it on the evaluator instance.

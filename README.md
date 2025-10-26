@@ -29,7 +29,32 @@ This project implements an advanced computer vision system that can:
 - **Compliance Scoring**: Automatic assessment of safety compliance levels
 - **Detailed Reports**: Text and JSON reports with recommendations
 
+## 📦 Current Approach
+
+### ✅ Recommended: Faster R-CNN with Confidence Calibration
+- **Model**: Faster R-CNN ResNet50+FPN (baseline)
+- **Enhancement**: Confidence calibration (focal loss + class weighting)
+- **Expected mAP**: 0.2659 → 0.28-0.30 (+5-10%)
+- **Expected Confidence**: 0.125 → 0.82+
+- **Training Script**: `scripts/train/train_with_confidence.py`
+
+### 📚 Archived Experimental Approaches
+Old experiments that failed are archived for educational reference:
+- **4-Stage Multi-Task Learning**: -78.8% mAP (competing gradients)
+- **SSL Pretraining**: No improvement (dataset too small)
+- **Spatial Constraints**: Ineffective
+
+See: `scripts/train/archived_failed_approaches/ARCHIVE_README.md` for details on why each failed.
+
 ## Installation
+
+```bash
+git clone https://github.com/FrankieLingIsHere/Image-Classification-for-PPE.git
+cd Image-Classification-for-PPE
+pip install -r requirements.txt
+```
+
+**👉 Ready to train? See [QUICK_START.md](QUICK_START.md) for step-by-step instructions.**
 
 ### Prerequisites
 - Python 3.8+

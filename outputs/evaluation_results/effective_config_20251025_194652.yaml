@@ -1,0 +1,13 @@
+class_conf_thresholds:
+  eye_protection: 0.2
+  hard_hat: 0.25
+  no_hard_hat: 0.12
+  no_safety_vest: 0.12
+  person: 0.1
+  safety_boots: 0.2
+  safety_gloves: 0.2
+  safety_vest: 0.25
+conf_threshold: 0.5
+eval_iou_threshold: 0.5
+iou_threshold: 0.45
+person_overlap_threshold: 0.3
