@@ -337,7 +337,9 @@ def main():
     parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu', help='Device')
     parser.add_argument('--augment', action='store_true', default=True, help='Use augmentations')
     parser.add_argument('--checkpoint_dir', default='models', help='Checkpoint directory')
-    
+    parser.add_argument('--resume_from_stage1', action='store_true', help='If set, initialize stage 2 model weights from stage 1 best model')
+    parser.add_argument('--skip_stage1', action='store_true', help='Skip training stage 1 and load pretrained stage 1 model for stage 2')
+
     args = parser.parse_args()
     os.makedirs(args.checkpoint_dir, exist_ok=True)
     
@@ -346,27 +348,31 @@ def main():
     print("="*80)
     print(f"Config: Epochs={args.epochs}, Batch Size={args.batch_size}, LR={args.lr}, Device={args.device}")
     print("="*80 + "\n")
-    
-    # Stage 1: Human Detection
-    print("[STAGE 1] Training Human Detector (High Recall)")
+
     train_transforms = get_augmented_transforms() if args.augment else get_basic_transforms()
     val_transforms = get_basic_transforms()
     
-    stage1_train = TorchvisionPPEDataset(args.data_dir, split='train', transforms=train_transforms, stage='human')
-    stage1_val = TorchvisionPPEDataset(args.data_dir, split='val', transforms=val_transforms, stage='human')
-    
-    print(f"Stage 1 - Train: {len(stage1_train)}, Val: {len(stage1_val)}")
-    
-    stage1_train_loader = DataLoader(stage1_train, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn, num_workers=0)
-    stage1_val_loader = DataLoader(stage1_val, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn, num_workers=0)
-    
-    print(f"Stage 1 DataLoaders - Train batches: {len(stage1_train_loader)}, Val batches: {len(stage1_val_loader)}")
-    
-    stage1_model = create_model(num_classes=2, pretrained=True)  # background + person
-    stage1_model, stage1_history = train_stage(
-        'stage1_human', stage1_model, stage1_train_loader, stage1_val_loader,
-        args.epochs, args.lr, args.device, args.checkpoint_dir
-    )
+    # Stage 1: Human Detection
+    print("[STAGE 1] Training Human Detector (High Recall)")
+    if not args.skip_stage1:
+        print("[STAGE 1] Training Human Detector (High Recall)")
+
+        stage1_train = TorchvisionPPEDataset(args.data_dir, split='train', transforms=train_transforms, stage='human')
+        stage1_val = TorchvisionPPEDataset(args.data_dir, split='val', transforms=val_transforms, stage='human')
+        
+        print(f"Stage 1 - Train: {len(stage1_train)}, Val: {len(stage1_val)}")
+        
+        stage1_train_loader = DataLoader(stage1_train, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn)
+        stage1_val_loader = DataLoader(stage1_val, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn)
+        
+        stage1_model = create_model(num_classes=2, pretrained=True)
+        stage1_model, stage1_history = train_stage(
+            'stage1_human', stage1_model, stage1_train_loader, stage1_val_loader,
+            args.epochs, args.lr, args.device, args.checkpoint_dir
+        )
+    else:
+        print("[INFO] Skipping Stage 1 training.")
+        stage1_history = {}
     
     # Stage 2: PPE Detection
     print("\n[STAGE 2] Training PPE Detector (High Precision)")
@@ -379,6 +385,23 @@ def main():
     stage2_val_loader = DataLoader(stage2_val, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn, num_workers=0)
     
     stage2_model = create_model(num_classes=len(PPE_ONLY_CLASSES), pretrained=True)
+
+    if args.resume_from_stage1:
+        stage1_ckpt_path = os.path.join(args.checkpoint_dir, 'stage1_human_best.pth')
+        if os.path.exists(stage1_ckpt_path):
+            print(f"\n[INFO] Loading Stage 1 weights from {stage1_ckpt_path} ...")
+            ckpt = torch.load(stage1_ckpt_path, map_location=args.device)
+            stage1_state = ckpt['model_state_dict']
+            
+            # Load shared weights (ignore mismatched classifier head)
+            model_dict = stage2_model.state_dict()
+            pretrained_dict = {k: v for k, v in stage1_state.items() if k in model_dict and v.size() == model_dict[k].size()}
+            model_dict.update(pretrained_dict)
+            stage2_model.load_state_dict(model_dict)
+            print(f"[INFO] Loaded {len(pretrained_dict)} layers from Stage 1 model.")
+        else:
+            print(f"[WARNING] Stage 1 checkpoint not found: {stage1_ckpt_path}")
+
     stage2_model, stage2_history = train_stage(
         'stage2_ppe', stage2_model, stage2_train_loader, stage2_val_loader,
         args.epochs, args.lr, args.device, args.checkpoint_dir
