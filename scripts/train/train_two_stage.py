@@ -154,6 +154,29 @@ class TorchvisionPPEDataset(Dataset):
         img_t = self.transforms(img)
         return img_t, target, info['img_id']
 
+class EarlyStopping:
+    """Stop training when validation loss stops improving."""
+    def __init__(self, patience=8, min_delta=1e-4):
+        """
+        Args:
+            patience (int): Number of epochs with no improvement after which training will stop.
+            min_delta (float): Minimum change in the monitored quantity to qualify as an improvement.
+        """
+        self.patience = patience
+        self.min_delta = min_delta
+        self.best_loss = float('inf')
+        self.counter = 0
+        self.should_stop = False
+
+    def step(self, val_loss):
+        """Check if training should stop based on validation loss."""
+        if val_loss < self.best_loss - self.min_delta:
+            self.best_loss = val_loss
+            self.counter = 0
+        else:
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.should_stop = True
 
 def collate_fn(batch):
     """Collate function for DataLoader."""
@@ -222,6 +245,7 @@ def train_stage(stage_name, model, train_loader, val_loader, num_epochs, lr, dev
     
     best_loss = float('inf')
     history = {'train_loss': [], 'val_loss': [], 'class_weights': class_weights}
+    early_stopper = EarlyStopping(patience=8, min_delta=1e-4)
     
     for epoch in range(num_epochs):
         model.train()
@@ -294,6 +318,12 @@ def train_stage(stage_name, model, train_loader, val_loader, num_epochs, lr, dev
                 'train_loss': train_loss,
             }, checkpoint_path)
             print(f"  [SAVED] Best model: {checkpoint_path}")
+
+        # Early stopping check
+        early_stopper.step(val_loss)
+        if early_stopper.should_stop:
+            print(f"\n[EARLY STOPPING] Validation loss did not improve for {early_stopper.patience} epochs.")
+            break
     
     return model, history
 
