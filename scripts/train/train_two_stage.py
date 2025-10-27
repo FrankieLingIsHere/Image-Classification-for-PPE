@@ -109,22 +109,30 @@ class TorchvisionPPEDataset(Dataset):
         
         boxes = []
         labels = []
-        
-        if 'annotations' in info:
-            for ann in info['annotations']:
-                if 'bbox' in ann and 'category_id' in ann:
-                    bbox = ann['bbox']
-                    cat_id = ann['category_id']
-                    
-                    # Filter based on stage
-                    if self.stage == 'human' and cat_id != 1:  # 1 = person
-                        continue
-                    elif self.stage == 'ppe' and cat_id == 1:  # Skip person
-                        continue
-                    
-                    if cat_id in self.class2idx.values():
-                        boxes.append(bbox)
-                        labels.append(cat_id)
+
+        # Support both 'annotations' and 'detections' keys returned by the loader
+        annotations = info.get('annotations', info.get('detections', []))
+        for ann in annotations:
+            # Support different key names for bbox and category id
+            bbox = ann.get('bbox') or ann.get('bndbox') or ann.get('bounding_box')
+            cat_id = ann.get('category_id', ann.get('label'))
+
+            if bbox is None or cat_id is None:
+                continue
+
+            # Filter based on requested stage (note: labels were remapped by loader)
+            if self.stage == 'human':
+                # person index in this mapping should be 1
+                if cat_id != self.class2idx.get('person', 1):
+                    continue
+            elif self.stage == 'ppe':
+                # skip person annotations if present
+                if 'person' in self.class2idx and cat_id == self.class2idx.get('person'):
+                    continue
+
+            if cat_id in self.class2idx.values():
+                boxes.append(bbox)
+                labels.append(cat_id)
         
         if len(boxes) > 0:
             boxes = torch.as_tensor(boxes, dtype=torch.float32)
@@ -246,6 +254,18 @@ def train_stage(stage_name, model, train_loader, val_loader, num_epochs, lr, dev
                 targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
                 
                 loss_dict = model(images, targets)
+                # Debug: print first validation batch loss_dict structure for troubleshooting
+                if val_count == 0:
+                    try:
+                        print("[DEBUG] Sample val loss_dict keys:", list(loss_dict.keys()) if isinstance(loss_dict, dict) else type(loss_dict))
+                        if isinstance(loss_dict, dict):
+                            for k, v in loss_dict.items():
+                                try:
+                                    print(f"[DEBUG]   {k}:", float(v) if hasattr(v, 'item') else v)
+                                except Exception:
+                                    print(f"[DEBUG]   {k}: (non-scalar)")
+                    except Exception as e:
+                        print(f"[DEBUG] Could not print loss_dict: {e}")
                 if isinstance(loss_dict, dict):
                     losses = sum(loss for loss in loss_dict.values())
                     val_loss += losses.item()
