@@ -16,8 +16,9 @@ import torch.nn as nn
 from torch.optim import AdamW
 from torch.utils.data import DataLoader, Dataset
 import sys
-from pathlib import Path
+import os
 import json
+from pathlib import Path
 from collections import defaultdict
 
 # Add project root to path so we can import src
@@ -566,6 +567,7 @@ if __name__ == "__main__":
     parser.add_argument('--focal-loss', action='store_true', default=True, help='Use focal loss')
     parser.add_argument('--focal-gamma', type=float, default=3.0, help='Focal loss gamma (higher = stronger false positive suppression, default=3.0)')
     parser.add_argument('--class-weights', action='store_true', default=True, help='Use class weights')
+    parser.add_argument('--weights-file', type=str, default=None, help='Pre-calculated class weights JSON file (speeds up training start)')
     parser.add_argument('--output-model', type=str, default='models/production/rcnn_baseline_confidence_calibrated.pth', help='Output model path')
     parser.add_argument('--checkpoint-dir', default='models', help='Checkpoint directory')
     parser.add_argument('--backbone', default='resnet101', choices=['resnet50', 'resnet101'], help='Backbone architecture (resnet101 for better accuracy on small objects)')
@@ -615,9 +617,31 @@ if __name__ == "__main__":
     print(f"  Validation images: {len(val_ds)}")
     print()
     
-    # Calculate class weights from dataset
-    class_weights = calculate_class_weights_from_dataset(train_loader)
-    print()
+    # Load or calculate class weights
+    if args.weights_file and os.path.exists(args.weights_file):
+        print(f"Loading pre-calculated class weights from {args.weights_file}...")
+        with open(args.weights_file, 'r') as f:
+            weights_data = json.load(f)
+        
+        # Convert class names to indices
+        class_weights = {}
+        for class_name, weight in weights_data['weights'].items():
+            if class_name in PPE_CLASSES:
+                class_idx = PPE_CLASSES.index(class_name)
+                class_weights[class_idx] = weight
+        
+        print("\n[OK] Class Weights (from pre-calculated file):")
+        for idx, class_name in enumerate(PPE_CLASSES):
+            weight = class_weights.get(idx, 1.0)
+            count = weights_data['class_counts'].get(class_name, 0)
+            print(f"  {idx:2d}. {class_name:20s}: weight={weight:.3f} (count: {count})")
+        print()
+    else:
+        if args.weights_file:
+            print(f"Warning: Weights file {args.weights_file} not found, calculating from dataset...")
+        # Calculate class weights from dataset
+        class_weights = calculate_class_weights_from_dataset(train_loader)
+        print()
     
     # Create model
     num_classes = len(PPE_CLASSES)
