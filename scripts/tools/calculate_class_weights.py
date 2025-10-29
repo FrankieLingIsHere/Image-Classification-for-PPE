@@ -78,6 +78,7 @@ def calculate_class_weights(data_dir, split='train', strategy='inverse_freq'):
     if strategy == 'inverse_freq':
         # Inverse frequency (MATCHING train_with_confidence.py):
         # weight = total_instances / (count * num_classes)
+        # NO normalization - keep raw weights for better class balancing
         weights = {}
         for cls, count in class_counts.items():
             weights[cls] = total_instances / (count * num_classes)
@@ -94,9 +95,9 @@ def calculate_class_weights(data_dir, split='train', strategy='inverse_freq'):
     else:
         raise ValueError(f"Unknown strategy: {strategy}")
     
-    # Normalize weights by max_weight (MATCHING train_with_confidence.py)
-    max_weight = max(weights.values()) if weights else 1.0
-    normalized_weights = {cls: (w / max_weight) for cls, w in weights.items()}
+    # Use raw weights without normalization
+    # This preserves the relative importance better for loss weighting
+    normalized_weights = weights
     
     print(f"\nClass weights ({strategy}):")
     for cls in sorted(normalized_weights.keys()):

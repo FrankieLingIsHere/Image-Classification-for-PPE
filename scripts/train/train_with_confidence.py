@@ -215,10 +215,8 @@ def calculate_class_weights_from_dataset(train_loader):
             weight = 1.0
         class_weights[class_idx] = weight
     
-    # Normalize weights
-    max_weight = max(class_weights.values()) if class_weights else 1.0
-    for k in class_weights:
-        class_weights[k] = class_weights[k] / max_weight
+    # Do NOT normalize - keep raw weights for better class balancing
+    # Raw weights range from ~0.4 (common classes) to ~5.0 (rare classes)
     
     print("\n[OK] Class Weights (from dataset statistics):")
     for idx, (class_name, weight) in enumerate(zip(PPE_CLASSES, [class_weights.get(i, 1.0) for i in range(len(PPE_CLASSES))])):
@@ -569,10 +567,14 @@ if __name__ == "__main__":
     parser.add_argument('--class-weights', action='store_true', default=True, help='Use class weights')
     parser.add_argument('--weights-file', type=str, default=None, help='Pre-calculated class weights JSON file (speeds up training start)')
     parser.add_argument('--output-model', type=str, default='models/production/rcnn_baseline_confidence_calibrated.pth', help='Output model path')
-    parser.add_argument('--checkpoint-dir', default='models', help='Checkpoint directory')
+    parser.add_argument('--checkpoint-dir', default='models', help='Checkpoint directory (deprecated, use --output-dir)')
+    parser.add_argument('--output-dir', type=str, default=None, help='Output directory for checkpoints (overrides --checkpoint-dir)')
     parser.add_argument('--backbone', default='resnet101', choices=['resnet50', 'resnet101'], help='Backbone architecture (resnet101 for better accuracy on small objects)')
     
     args = parser.parse_args()
+    
+    # Use --output-dir if provided, otherwise fall back to --checkpoint-dir
+    checkpoint_dir = args.output_dir if args.output_dir else args.checkpoint_dir
     
     device = torch.device(args.device)
     
@@ -593,6 +595,7 @@ if __name__ == "__main__":
     print(f"  Augmentations: {'Enabled' if args.augment else 'Disabled'}")
     print(f"  Focal Loss: {args.focal_loss}")
     print(f"  Class Weights: {args.class_weights}")
+    print(f"  Output Directory: {checkpoint_dir}")
     print()
     
     # Load datasets
@@ -660,7 +663,7 @@ if __name__ == "__main__":
         class_weights=class_weights,
         focal_gamma=args.focal_gamma,
         device=device,
-        checkpoint_dir=args.checkpoint_dir
+        checkpoint_dir=checkpoint_dir
     )
     
     # Apply temperature calibration on validation set
@@ -672,7 +675,7 @@ if __name__ == "__main__":
     optimal_temp = calibrate_with_temperature(trained_model, val_ds, device=device)
     
     # Load best checkpoint and update temperature
-    best_checkpoint_path = Path(args.checkpoint_dir) / 'model_confidence_calibrated_best.pth'
+    best_checkpoint_path = Path(checkpoint_dir) / 'model_confidence_calibrated_best.pth'
     if best_checkpoint_path.exists():
         checkpoint = torch.load(best_checkpoint_path, map_location=device)
         checkpoint['temperature'] = optimal_temp
@@ -695,7 +698,7 @@ if __name__ == "__main__":
     print(f"    Temperature parameter: {optimal_temp:.3f}")
     
     # Save training history
-    history_path = Path(args.checkpoint_dir) / 'training_history.json'
+    history_path = Path(checkpoint_dir) / 'training_history.json'
     with open(history_path, 'w') as f:
         history['temperature'] = optimal_temp
         json.dump(history, f, indent=2)
