@@ -244,33 +244,120 @@ class LabelStudioExportFixer:
         print("💡 The original filenames have been restored (image1.xml, image2.xml, etc.)")
 
 
+def rename_files_in_directory(directory, dry_run=False):
+    """
+    Simple utility to rename files in a directory by removing UUID prefixes.
+    
+    Args:
+        directory: Directory containing files with UUID prefixes
+        dry_run: If True, only show what would be renamed without actually renaming
+    
+    Examples:
+        2e390e6e-image339.xml -> image339.xml
+        81c078b4-image10.png -> image10.png
+    """
+    directory = Path(directory)
+    if not directory.exists():
+        print(f"❌ Directory not found: {directory}")
+        return
+    
+    print(f"🔍 Scanning directory: {directory}")
+    print()
+    
+    renamed_count = 0
+    files_to_rename = []
+    
+    # Find all files with UUID prefix pattern (UUID-filename)
+    for file_path in directory.iterdir():
+        if file_path.is_file():
+            filename = file_path.name
+            
+            # Check if filename has UUID prefix (e.g., "2e390e6e-image339.xml")
+            if '-' in filename and len(filename.split('-')[0]) == 8:
+                # Extract original name (everything after first dash)
+                original_name = filename.split('-', 1)[1]
+                new_path = file_path.parent / original_name
+                
+                files_to_rename.append((file_path, new_path, filename, original_name))
+    
+    if not files_to_rename:
+        print("✅ No files with UUID prefixes found. All filenames look good!")
+        return
+    
+    print(f"Found {len(files_to_rename)} files with UUID prefixes:")
+    print()
+    
+    for old_path, new_path, old_name, new_name in files_to_rename:
+        if dry_run:
+            print(f"  {old_name} -> {new_name}")
+        else:
+            # Check if target already exists
+            if new_path.exists():
+                print(f"⚠️  Skipping {old_name} (target {new_name} already exists)")
+                continue
+            
+            # Rename the file
+            old_path.rename(new_path)
+            renamed_count += 1
+            print(f"✅ {old_name} -> {new_name}")
+    
+    print()
+    if dry_run:
+        print(f"💡 This was a dry run. Use --rename to actually rename {len(files_to_rename)} files.")
+    else:
+        print(f"✅ Successfully renamed {renamed_count} files!")
+        if renamed_count < len(files_to_rename):
+            print(f"⚠️  Skipped {len(files_to_rename) - renamed_count} files (targets already exist)")
+
+
 def main():
     """Main function with usage instructions"""
     import sys
+    import argparse
+    
+    parser = argparse.ArgumentParser(
+        description='Fix Label Studio exports or rename files with UUID prefixes',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Fix Label Studio export (zip/json)
+  python fix_label_studio_export.py --export my_export.zip --output data/annotations
+  
+  # Preview renaming files in a directory (dry run)
+  python fix_label_studio_export.py --rename-dir data/annotations --dry-run
+  
+  # Actually rename files in a directory
+  python fix_label_studio_export.py --rename-dir data/annotations
+  
+  # Both modes remove UUID prefixes:
+  # 2e390e6e-image339.xml -> image339.xml
+        """
+    )
+    
+    parser.add_argument('--export', type=str, help='Label Studio export file (.zip or .json)')
+    parser.add_argument('--output', type=str, default='data/annotations', help='Output directory for fixed annotations')
+    parser.add_argument('--rename-dir', type=str, help='Directory containing files to rename (removes UUID prefixes)')
+    parser.add_argument('--dry-run', action='store_true', help='Show what would be renamed without actually renaming')
+    
+    args = parser.parse_args()
     
     print("🏷️  Label Studio Export Fixer")
     print("=" * 50)
     print()
     
-    if len(sys.argv) < 2:
-        print("Usage:")
-        print("  python fix_export.py <export_file>")
-        print()
-        print("Examples:")
-        print("  python fix_export.py my_export.zip")
-        print("  python fix_export.py my_export.json")
-        print()
-        print("The script will:")
-        print("1. Remove Label Studio filename prefixes (81c078b4-image10.png -> image10.png)")
-        print("2. Fix XML filenames to match your original images")
-        print("3. Save corrected annotations to data/annotations/")
+    # Mode 1: Rename files in directory
+    if args.rename_dir:
+        rename_files_in_directory(args.rename_dir, dry_run=args.dry_run)
         return
     
-    export_file = sys.argv[1]
-    output_dir = sys.argv[2] if len(sys.argv) > 2 else "data/annotations"
+    # Mode 2: Fix Label Studio export
+    if args.export:
+        fixer = LabelStudioExportFixer(args.export, args.output)
+        fixer.fix_export()
+        return
     
-    fixer = LabelStudioExportFixer(export_file, output_dir)
-    fixer.fix_export()
+    # No arguments provided
+    parser.print_help()
 
 if __name__ == "__main__":
     main()

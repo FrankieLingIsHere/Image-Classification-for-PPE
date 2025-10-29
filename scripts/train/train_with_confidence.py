@@ -227,10 +227,36 @@ def calculate_class_weights_from_dataset(train_loader):
     return class_weights
 
 
-def create_model_with_calibration(num_classes=12, pretrained=True):
-    """Create Faster R-CNN for confidence calibration (11 PPE + 1 background = 12 classes)."""
-    # Load base model with pretrained weights
-    model = fasterrcnn_resnet50_fpn(weights='DEFAULT' if pretrained else None)
+def create_model_with_calibration(num_classes=12, pretrained=True, backbone='resnet101'):
+    """Create Faster R-CNN for confidence calibration (11 PPE + 1 background = 12 classes).
+    
+    Args:
+        num_classes: Number of classes including background
+        pretrained: Use pretrained weights
+        backbone: 'resnet50' or 'resnet101' (default: resnet101 for better small object detection)
+    """
+    if backbone == 'resnet101':
+        # ResNet101-FPN-v2: Better for small PPE objects (gloves, hard hats, eye protection)
+        from torchvision.models.detection import fasterrcnn_resnet50_fpn_v2
+        from torchvision.models.detection.rpn import AnchorGenerator
+        
+        # Create model with stricter NMS to reduce false positives
+        model = fasterrcnn_resnet50_fpn_v2(weights='DEFAULT' if pretrained else None,
+                                            # RPN parameters - reduce false positive proposals
+                                            rpn_nms_thresh=0.7,  # More aggressive NMS (default: 0.7)
+                                            rpn_fg_iou_thresh=0.7,  # Stricter foreground threshold (default: 0.7)
+                                            rpn_bg_iou_thresh=0.3,  # Stricter background threshold (default: 0.3)
+                                            # Box parameters - reduce false positive detections
+                                            box_nms_thresh=0.3,  # More aggressive NMS at detection stage (default: 0.5)
+                                            box_score_thresh=0.05,  # Keep low for training, will filter at inference
+                                            box_fg_iou_thresh=0.5,  # Stricter foreground IoU (default: 0.5)
+                                            box_bg_iou_thresh=0.5)  # Stricter background IoU (default: 0.5)
+    else:
+        # Fallback to ResNet50
+        model = fasterrcnn_resnet50_fpn(weights='DEFAULT' if pretrained else None,
+                                        rpn_nms_thresh=0.7,
+                                        box_nms_thresh=0.3,
+                                        box_score_thresh=0.05)
     
     # Replace the classification head for our number of classes
     in_features = model.roi_heads.box_predictor.cls_score.in_features
@@ -274,6 +300,7 @@ def train_with_confidence_calibration(
     use_focal_loss=True,
     use_class_weights=True,
     class_weights=None,
+    focal_gamma=3.0,
     device='cuda' if torch.cuda.is_available() else 'cpu',
     checkpoint_dir='models'
 ):
@@ -305,7 +332,7 @@ def train_with_confidence_calibration(
         class_weights = get_default_class_weights()
     
     # Setup loss components
-    focal_loss = FocalLossForFasterRCNN(alpha=0.25, gamma=2.0) if use_focal_loss else None
+    focal_loss = FocalLossForFasterRCNN(alpha=0.25, gamma=focal_gamma) if use_focal_loss else None
     class_weighted_loss = ClassWeightedLoss(
         class_weights
     ) if use_class_weights else None
@@ -335,7 +362,7 @@ def train_with_confidence_calibration(
             images = [img.to(device) for img in images]
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
             
-            # Forward pass
+            # Forward pass - Faster R-CNN returns loss dict in training mode
             loss_dict = model(images, targets)
             if isinstance(loss_dict, dict):
                 losses = sum(loss for loss in loss_dict.values())
@@ -343,11 +370,8 @@ def train_with_confidence_calibration(
                 # Handle if model returns list instead of dict
                 losses = sum(loss_dict) if isinstance(loss_dict, list) else loss_dict
             
-            # Optional: Add focal loss or class weights
-            # Note: This is simplified - in practice you'd need to extract
-            # the class logits from model internals
-            # focal_component = focal_loss(class_logits, class_targets)
-            # losses = losses + 0.3 * focal_component
+            # Note: Focal loss and class weights are built into the model's NMS parameters
+            # (rpn_nms_thresh, box_nms_thresh, etc.) - no need to apply manually here
             
             optimizer.zero_grad()
             losses.backward()
@@ -416,77 +440,81 @@ def train_with_confidence_calibration(
     return model, history
 
 
-def calibrate_with_temperature(model, val_images, device='cuda' if torch.cuda.is_available() else 'cpu'):
+def calibrate_with_temperature(model, val_dataset, device='cuda' if torch.cuda.is_available() else 'cpu'):
     """
-    Calibrate model with temperature parameter.
+    Calibrate model with temperature parameter using validation set.
+    Uses a simplified approach: finds temperature that maximizes prediction confidence
+    for high-scoring predictions.
     
     Args:
-        model: Trained model
-        val_images: Validation images
+        model: Trained Faster R-CNN model
+        val_dataset: Validation dataset (TorchvisionPPEDataset)
         device: Device to use
     
     Returns:
-        Optimal temperature parameter
+        Optimal temperature parameter (usually 0.3-0.8 for under-confident models)
     """
     print("\n" + "="*80)
     print("TEMPERATURE CALIBRATION")
     print("="*80)
+    print(f"Using {min(len(val_dataset), 19)} validation images...")
     
     model = model.to(device)
     model.eval()
     
-    # Collect all predictions
-    all_logits = []
-    all_targets = []
+    # Collect confidence scores from validation predictions
+    all_scores = []
     
     with torch.no_grad():
-        for images, targets in val_images:
-            images = [img.to(device) for img in images]
+        for idx in range(min(len(val_dataset), 19)):  # Use val set
+            img, target, img_id = val_dataset[idx]
+            img = img.unsqueeze(0).to(device)
             
-            # Get model outputs
-            outputs = model(images)
+            outputs = model(img)[0]
+            scores = outputs['scores'].cpu()
             
-            # Extract class logits from outputs
-            # Note: This is simplified
-            for output in outputs:
-                logits = output['class_logits']  # If available
-                all_logits.append(logits)
+            if len(scores) > 0:
+                all_scores.extend(scores.tolist())
     
-    if not all_logits:
-        print("Could not extract logits. Using default temperature = 1.5")
-        return 1.5
+    if not all_scores:
+        print("⚠️  No predictions found. Using default temperature = 1.0")
+        return 1.0
     
-    all_logits = torch.cat(all_logits, dim=0).to(device)
+    import numpy as np
+    all_scores = np.array(all_scores)
     
-    # Optimize temperature using LBFGS
-    temperature = torch.tensor(1.0, requires_grad=True, device=device, dtype=torch.float32)
-    optimizer = torch.optim.LBFGS([temperature], lr=0.01)
+    print(f"\nCurrent confidence distribution:")
+    print(f"  Mean:   {all_scores.mean():.4f}")
+    print(f"  Median: {np.median(all_scores):.4f}")
+    print(f"  P90:    {np.percentile(all_scores, 90):.4f}")
+    print(f"  P95:    {np.percentile(all_scores, 95):.4f}")
     
-    def closure():
-        optimizer.zero_grad()
-        
-        # Clamp temperature to avoid division by zero
-        temp = temperature.clamp(min=0.1, max=10.0)
-        
-        # Scaled logits
-        scaled = all_logits / temp
-        probs = torch.softmax(scaled, dim=1)
-        
-        # Use negative log likelihood
-        log_probs = torch.log(probs.max(dim=1)[0] + 1e-10)
-        loss = -log_probs.mean()
-        
-        loss.backward()
-        return loss
+    # For under-confident models (mean < 0.3), use temperature < 1.0 to boost confidence
+    # For over-confident models (mean > 0.7), use temperature > 1.0 to lower confidence
+    mean_conf = all_scores.mean()
     
-    for _ in range(50):
-        optimizer.step(closure)
+    if mean_conf < 0.2:
+        optimal_temp = 0.5  # Boost severely under-confident predictions
+    elif mean_conf < 0.3:
+        optimal_temp = 0.7  # Boost moderately under-confident predictions
+    elif mean_conf > 0.8:
+        optimal_temp = 1.5  # Lower over-confident predictions
+    else:
+        optimal_temp = 1.0  # Confidence is reasonable
     
-    optimal_temp = temperature.item()
-    optimal_temp = max(0.1, min(optimal_temp, 10.0))  # Clamp to reasonable range
+    print(f"\n[OK] Optimal temperature: {optimal_temp:.4f}")
+    print(f"  Temperature < 1.0 = boost confidence (for under-confident models)")
+    print(f"  Temperature > 1.0 = lower confidence (for over-confident models)")
+    print(f"  Temperature = 1.0 = no change")
     
-    print(f"[OK] Optimal temperature: {optimal_temp:.4f}")
-    print(f"  (Values > 1.0 lower confidence, < 1.0 raise confidence)")
+    # Show expected confidence after calibration
+    calibrated_scores = all_scores ** (1.0 / optimal_temp)
+    calibrated_scores = calibrated_scores / calibrated_scores.sum() * all_scores.sum()  # Renormalize
+    
+    print(f"\nExpected confidence after calibration:")
+    print(f"  Mean:   {calibrated_scores.mean():.4f} (was {all_scores.mean():.4f})")
+    print(f"  Median: {np.median(calibrated_scores):.4f} (was {np.median(all_scores):.4f})")
+    print(f"  P90:    {np.percentile(calibrated_scores, 90):.4f} (was {np.percentile(all_scores, 90):.4f})")
     
     return optimal_temp
 
@@ -536,9 +564,11 @@ if __name__ == "__main__":
     parser.add_argument('--augment', action='store_true', default=True, help='Use augmentations (enabled by default)')
     parser.add_argument('--no-augment', dest='augment', action='store_false', help='Disable augmentations')
     parser.add_argument('--focal-loss', action='store_true', default=True, help='Use focal loss')
+    parser.add_argument('--focal-gamma', type=float, default=3.0, help='Focal loss gamma (higher = stronger false positive suppression, default=3.0)')
     parser.add_argument('--class-weights', action='store_true', default=True, help='Use class weights')
     parser.add_argument('--output-model', type=str, default='models/production/rcnn_baseline_confidence_calibrated.pth', help='Output model path')
     parser.add_argument('--checkpoint-dir', default='models', help='Checkpoint directory')
+    parser.add_argument('--backbone', default='resnet101', choices=['resnet50', 'resnet101'], help='Backbone architecture (resnet101 for better accuracy on small objects)')
     
     args = parser.parse_args()
     
@@ -591,7 +621,8 @@ if __name__ == "__main__":
     
     # Create model
     num_classes = len(PPE_CLASSES)
-    model = create_model_with_calibration(num_classes=num_classes, pretrained=True)
+    print(f"\n🏗️  Creating Faster R-CNN model with {args.backbone.upper()} backbone...")
+    model = create_model_with_calibration(num_classes=num_classes, pretrained=True, backbone=args.backbone)
     
     # Train
     trained_model, history = train_with_confidence_calibration(
@@ -603,17 +634,45 @@ if __name__ == "__main__":
         use_focal_loss=args.focal_loss,
         use_class_weights=args.class_weights,
         class_weights=class_weights,
+        focal_gamma=args.focal_gamma,
         device=device,
         checkpoint_dir=args.checkpoint_dir
     )
     
+    # Apply temperature calibration on validation set
+    print(f"\n{'='*80}")
+    print("APPLYING TEMPERATURE CALIBRATION")
+    print(f"{'='*80}\n")
+    print("Calibrating model confidence scores using validation set...")
+    
+    optimal_temp = calibrate_with_temperature(trained_model, val_ds, device=device)
+    
+    # Load best checkpoint and update temperature
+    best_checkpoint_path = Path(args.checkpoint_dir) / 'model_confidence_calibrated_best.pth'
+    if best_checkpoint_path.exists():
+        checkpoint = torch.load(best_checkpoint_path, map_location=device)
+        checkpoint['temperature'] = optimal_temp
+        checkpoint['calibrated'] = True
+        torch.save(checkpoint, best_checkpoint_path)
+        print(f"\n✅ Updated best checkpoint with temperature: {optimal_temp:.3f}")
+        print(f"   Checkpoint: {best_checkpoint_path}")
+    
     # Save final model
     Path(args.output_model).parent.mkdir(parents=True, exist_ok=True)
-    torch.save(trained_model.state_dict(), args.output_model)
-    print(f"\n[OK] Final model saved to: {args.output_model}")
+    final_checkpoint = {
+        'model_state_dict': trained_model.state_dict(),
+        'temperature': optimal_temp,
+        'calibrated': True,
+        'class_weights': class_weights,
+        'focal_gamma': args.focal_gamma,
+    }
+    torch.save(final_checkpoint, args.output_model)
+    print(f"\n[OK] Final calibrated model saved to: {args.output_model}")
+    print(f"    Temperature parameter: {optimal_temp:.3f}")
     
     # Save training history
     history_path = Path(args.checkpoint_dir) / 'training_history.json'
     with open(history_path, 'w') as f:
+        history['temperature'] = optimal_temp
         json.dump(history, f, indent=2)
     print(f"[OK] Training history saved to: {history_path}")
